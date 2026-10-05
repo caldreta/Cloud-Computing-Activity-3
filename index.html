@@ -11,12 +11,15 @@
 </head>
 <body>
   <div class="page">
-    <header class="site-head">
-      <h1>Champion Games</h1>
-      <p>Guess, sort and match champions from the roster. Pick a game to start.</p>
-      <div id="api-status" role="status">Loading roster…</div>
-    </header>
-    <main id="categories"></main>
+    <div id="hub-screen">
+      <header class="site-head">
+        <h1>Champion Games</h1>
+        <p>Guess, sort and match champions from the roster. Pick a game to start.</p>
+        <div id="api-status" role="status">Loading roster…</div>
+      </header>
+      <main id="categories"></main>
+    </div>
+    <main id="game-screen" hidden></main>
   </div>
   <script src="app.js"></script>
 </body>

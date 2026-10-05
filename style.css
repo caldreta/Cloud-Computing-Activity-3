@@ -64,3 +64,112 @@ a.mode:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 40rem) {
   .category { grid-template-columns: 1fr; gap: 1rem; }
 }
+
+/* =====================================================
+   GAME SCREENS (shared)
+   ===================================================== */
+:root {
+  --correct: #1f8a4c;
+  --partial: #e0a526;
+  --wrong: #b23a3a;
+  --panel: #f7f9fb;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --panel: #18232f; --correct: #2aa45f; --wrong: #c24b4b; }
+}
+.sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+.back { display: inline-block; margin-bottom: 1.5rem; color: var(--muted); text-decoration: none; font-weight: 600; }
+.back:hover, .back:focus-visible { color: var(--ink); text-decoration: underline; }
+.game-head h1 { font: 800 clamp(2rem, 6vw, 3rem)/1 var(--font-head); letter-spacing: -0.03em; margin: 0 0 .5rem; color: var(--loldle); }
+.game-head p { margin: 0; color: var(--muted); max-width: 34rem; }
+.loading, .error, .empty { color: var(--muted); }
+.error { color: #b3261e; }
+
+button { font: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--loldle); outline-offset: 2px; }
+.btn {
+  background: var(--loldle); color: #fff; border: 0; border-radius: 6px;
+  padding: .6rem 1.1rem; font-weight: 600;
+}
+@media (prefers-color-scheme: dark) { .btn { color: #101822; } }
+.btn-quiet {
+  background: none; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; padding: .6rem .9rem;
+}
+.btn-quiet:hover { color: var(--ink); border-color: var(--muted); }
+
+/* ---- Classic ---- */
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; padding: 0; margin: 1.5rem 0; color: var(--muted); font-size: .9rem; }
+.legend li { display: flex; align-items: center; gap: .4rem; }
+.swatch {
+  display: inline-grid; place-items: center; min-width: 1.6rem; height: 1.6rem; padding: 0 .3rem;
+  border-radius: 4px; color: #fff; font-size: .8rem; font-weight: 700;
+}
+.swatch[data-state="correct"] { background: var(--correct); }
+.swatch[data-state="partial"] { background: var(--partial); color: #1b1300; }
+.swatch[data-state="wrong"] { background: var(--wrong); }
+
+.guess-bar { display: flex; gap: .75rem; align-items: flex-start; flex-wrap: wrap; }
+.combo { position: relative; flex: 1 1 18rem; max-width: 26rem; }
+.combo input {
+  width: 100%; padding: .75rem .9rem; font: inherit; color: var(--ink);
+  background: var(--panel); border: 2px solid var(--line); border-radius: 6px;
+}
+.combo input:disabled { opacity: .55; }
+.options {
+  position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px);
+  list-style: none; margin: 0; padding: .25rem; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+.options li { display: flex; align-items: center; gap: .6rem; padding: .4rem .5rem; border-radius: 4px; cursor: pointer; }
+.options li[aria-selected="true"] { background: color-mix(in srgb, var(--loldle) 18%, transparent); }
+.options .no-match { color: var(--muted); cursor: default; }
+.counter { min-height: 1.5rem; margin: .75rem 0; color: var(--muted); }
+
+.portrait {
+  position: relative; flex: none; display: grid; place-items: center; overflow: hidden;
+  background: var(--line); color: var(--muted); font: 700 1rem var(--font-head); border-radius: 6px;
+}
+.portrait::before { content: attr(data-initial); }
+.portrait img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.portrait img.broken { display: none; }
+.portrait-sm { width: 2.25rem; height: 2.25rem; }
+.portrait-lg { width: 4.5rem; height: 4.5rem; font-size: 1.8rem; }
+
+.result {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: 1rem 1.25rem; margin-bottom: 1.5rem; border-radius: 8px;
+  background: var(--panel); border-left: 6px solid var(--correct);
+}
+.result[data-status="gaveUp"] { border-left-color: var(--wrong); }
+.result-text { flex: 1 1 10rem; }
+.result h2 { margin: 0; font: 700 1.4rem var(--font-head); }
+.result p { margin: .15rem 0 0; color: var(--muted); }
+
+.board-scroll { overflow-x: auto; padding-bottom: .5rem; }
+.board { min-width: 62rem; }
+.row {
+  display: grid; grid-template-columns: 11rem repeat(9, minmax(5.2rem, 1fr));
+  gap: .35rem; margin-bottom: .35rem;
+}
+.row-head { color: var(--muted); font-size: .85rem; font-weight: 600; padding-bottom: .15rem; }
+.cell-champ { display: flex; align-items: center; gap: .6rem; font-weight: 600; min-width: 0; }
+.tile {
+  position: relative; display: grid; place-items: center; text-align: center;
+  min-height: 4rem; padding: .5rem .4rem; border-radius: 6px;
+  color: #fff; font-size: .85rem; font-weight: 600; line-height: 1.2;
+}
+.tile[data-state="correct"] { background: var(--correct); }
+.tile[data-state="partial"] { background: var(--partial); color: #1b1300; }
+.tile[data-state="wrong"] { background: var(--wrong); }
+.mark { position: absolute; top: 3px; left: 5px; font-size: .7rem; opacity: .85; }
+.dir { font-size: .9rem; }
+
+/* Only the newest row animates, in answer to the guess just made. */
+@media (prefers-reduced-motion: no-preference) {
+  .row.fresh .tile { animation: reveal .45s ease-out both; animation-delay: calc(var(--i) * 110ms); }
+  @keyframes reveal { from { opacity: 0; transform: rotateX(90deg); } to { opacity: 1; transform: none; } }
+}
