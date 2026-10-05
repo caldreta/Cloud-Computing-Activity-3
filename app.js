@@ -113,16 +113,16 @@ function escapeHtml(text) {
 }
 
 function renderCategories() {
-  categoriesEl.innerHTML = CATEGORIES.map((cat) => `
+  categoriesEl.innerHTML = CATEGORIES.map((cat, ci) => `
     <section class="category" data-cat="${cat.id}" aria-labelledby="h-${cat.id}">
       <div class="category-head">
         <h2 id="h-${cat.id}">${cat.name}</h2>
         <p>${cat.blurb}</p>
       </div>
       <ul class="modes">
-        ${cat.modes.map((m) => m.ready
-          ? `<li><a class="mode" href="${m.href}"><span class="mode-name">${m.name}</span><span class="mode-desc">${m.desc}</span><span class="mode-state">Play</span></a></li>`
-          : `<li><div class="mode is-locked"><span class="mode-name">${m.name}</span><span class="mode-desc">${m.desc}</span><span class="mode-state">Not built yet</span></div></li>`
+        ${cat.modes.map((m, i) => m.ready
+          ? `<li style="--i:${ci * 3 + i}"><a class="mode mode-card" href="${m.href}"><span class="mode-name">${m.name}</span><span class="mode-desc">${m.desc}</span><span class="mode-state">Play <span class="arrow" aria-hidden="true">→</span></span></a></li>`
+          : `<li style="--i:${ci * 3 + i}"><div class="mode mode-card is-locked"><span class="mode-name">${m.name}</span><span class="mode-desc">${m.desc}</span><span class="mode-state">Not built yet</span></div></li>`
         ).join("")}
       </ul>
     </section>`).join("");
@@ -165,6 +165,7 @@ function route() {
   const start = GAMES[key];
   gameScreen.innerHTML = "";
   if (start) {
+    gameScreen.dataset.cat = key.split("/")[0];
     hubScreen.hidden = true;
     gameScreen.hidden = false;
     window.scrollTo(0, 0);
@@ -268,7 +269,7 @@ function createPicker(roster, onPick) {
 
     list.innerHTML = matches.length
       ? matches.map((c, i) => `<li id="opt-${i}" role="option" data-id="${c.id}" aria-selected="${i === active}">
-          ${portraitHtml(c)}<span>${escapeHtml(c.name)}</span></li>`).join("")
+          ${portraitHtml(c, "md")}<span>${escapeHtml(c.name)}</span></li>`).join("")
       : `<li class="no-match">No champion matches "${escapeHtml(query)}"</li>`;
     list.hidden = false;
     input.setAttribute("aria-expanded", "true");
@@ -444,7 +445,7 @@ async function startClassic(root) {
       CLASSIC_COLUMNS.map((c) => `<div>${c.label}</div>`).join("")}</div>`;
     const rows = guesses.slice().reverse().map((g, idx) => `
       <div class="row${idx === 0 ? " fresh" : ""}">
-        <div class="cell-champ">${portraitHtml(g)}<span>${escapeHtml(g.name)}</span></div>
+        <div class="cell-champ">${portraitHtml(g, "md")}<span>${escapeHtml(g.name)}</span></div>
         ${CLASSIC_COLUMNS.map((c, i) => renderTile(c, g, secret, i)).join("")}
       </div>`).join("");
     board.innerHTML = head + rows;
@@ -603,7 +604,7 @@ async function startLore(root) {
   function renderWrong() {
     wrongSection.innerHTML = wrong.length
       ? `<h2>Not these</h2><ul class="wrong-list">${wrong.map((c) =>
-          `<li>${portraitHtml(c)}<span>${escapeHtml(c.name)}</span><span class="wrong-x" aria-hidden="true">✕</span></li>`).join("")}</ul>`
+          `<li>${portraitHtml(c, "md")}<span>${escapeHtml(c.name)}</span><span class="wrong-x" aria-hidden="true">✕</span></li>`).join("")}</ul>`
       : "";
   }
 
@@ -656,7 +657,7 @@ function tokensOf(champ, attr) {
 }
 
 function championCardHtml(champ) {
-  return `${portraitHtml(champ, "lg")}<span class="opt-name">${escapeHtml(champ.name)}</span>`;
+  return `${portraitHtml(champ, "xl")}<span class="opt-name">${escapeHtml(champ.name)}</span>`;
 }
 
 async function startQuiz(root, { hash, title, intro, makeRound }) {
@@ -691,7 +692,7 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
       ${round.visual ? `<div class="quiz-visual">${round.visual}</div>` : ""}
       <h2 class="quiz-prompt">${round.prompt}</h2>
       <div class="quiz-options" data-layout="${round.layout}">
-        ${round.options.map((o, i) => `<button type="button" class="quiz-option" data-i="${i}">${o.html}<span class="quiz-mark" aria-hidden="true"></span></button>`).join("")}
+        ${round.options.map((o, i) => `<button type="button" class="quiz-option" data-i="${i}" style="--i:${i}">${o.html}<span class="quiz-mark" aria-hidden="true"></span></button>`).join("")}
       </div>
       <div id="feedback" class="quiz-feedback" aria-live="polite"></div>`;
     quiz.querySelectorAll(".quiz-option").forEach((btn) => {
@@ -865,7 +866,7 @@ function makeTrueFalseRound(roster, used) {
   const value = isTrue ? pickRandom(own).label : pickRandom(wrongValues);
 
   return {
-    visual: portraitHtml(champ, "lg"),
+    visual: portraitHtml(champ, "xl"),
     prompt: `${escapeHtml(attr.say(champ.name, value))}.`,
     layout: "binary",
     options: [
@@ -895,7 +896,7 @@ function startTrueFalse(root) {
        targets: [{ id, html, capacity }] }
    ===================================================== */
 function shortChampionHtml(champ) {
-  return `${portraitHtml(champ)}<span class="match-name">${escapeHtml(champ.name)}</span>`;
+  return `${portraitHtml(champ, "lg")}<span class="match-name">${escapeHtml(champ.name)}</span>`;
 }
 
 async function startMatching(root, { hash, title, intro, makeBoard }) {
@@ -910,6 +911,8 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
   const mount = root.querySelector("#match");
 
   let board, placed, selected, mistakes, message, startedAt, finishedAt;
+  let animateIn = true;     // cards slide in on a fresh board only, not on every click
+  let lastPlaced = null;    // id of the card just placed, so only it pops
 
   function newRun() {
     board = makeBoard(roster);
@@ -919,10 +922,15 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
     message = "";
     startedAt = Date.now();
     finishedAt = null;
+    animateIn = true;
+    lastPlaced = null;
     render();
   }
 
   function render() {
+    const enter = animateIn, justId = lastPlaced;
+    animateIn = false;
+    lastPlaced = null;
     const done = placed.size === board.items.length;
     const remaining = board.items.filter((i) => !placed.has(i.id));
     const status = done ? "All placed."
@@ -930,15 +938,15 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
 
     mount.innerHTML = `
       <p class="match-status" role="status">${escapeHtml(status)} <span class="match-mistakes">Mistakes: ${mistakes}</span></p>
-      ${done ? "" : `<div class="match-tray" aria-label="Cards to place">${remaining.map((item) =>
-        `<button type="button" class="match-item" data-id="${escapeHtml(item.id)}" aria-pressed="${selected === item.id}">${item.html}</button>`
+      ${done ? "" : `<div class="match-tray${enter ? " enter" : ""}" aria-label="Cards to place">${remaining.map((item, n) =>
+        `<button type="button" class="match-item" data-kind="${item.kind || "champion"}" style="--i:${n}" data-id="${escapeHtml(item.id)}" aria-pressed="${selected === item.id}">${item.html}</button>`
       ).join("")}</div>`}
       <div class="match-targets">${board.targets.map((t) => {
         const inside = board.items.filter((i) => placed.get(i.id) === t.id);
         const full = inside.length >= t.capacity;
         return `<div class="match-target">
           <button type="button" class="match-target-btn" data-id="${escapeHtml(t.id)}"${full ? ' aria-disabled="true"' : ""}>${t.html}</button>
-          <div class="match-placed">${inside.map((i) => `<div class="match-chip">${i.html}</div>`).join("")}</div>
+          <div class="match-placed">${inside.map((i) => `<div class="match-chip${i.id === justId ? " just" : ""}">${i.html}</div>`).join("")}</div>
         </div>`;
       }).join("")}</div>
       ${done ? (() => {
@@ -979,6 +987,7 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
     const targetId = targetBtn.dataset.id;
     if (item.accepts.includes(targetId)) {
       placed.set(item.id, targetId);
+      lastPlaced = item.id;
       selected = null;
       message = "";
       if (placed.size === board.items.length) finishedAt = Date.now();
@@ -1085,7 +1094,7 @@ function makeLoreBoard(roster) {
   const picks = sample(roster, 5);
   const items = picks.map((c) => {
     const snippet = buildClues(c).filter((x) => x.kind === "lore").slice(0, 2).map((x) => x.text).join(" ");
-    return { id: `c${c.id}`, html: `<span class="snippet">${clueHtml(snippet)}</span>`, accepts: [`c${c.id}`], champ: c };
+    return { id: `c${c.id}`, html: `<span class="snippet">${clueHtml(snippet)}</span>`, accepts: [`c${c.id}`], champ: c, kind: "text" };
   });
   const targets = shuffle(picks).map((c) => ({ id: `c${c.id}`, html: shortChampionHtml(c), capacity: 1 }));
   return { items: shuffle(items), targets };
