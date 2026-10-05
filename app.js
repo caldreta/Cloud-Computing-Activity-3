@@ -22,7 +22,9 @@ async function getRoster() {
 
 // image_url comes back as a relative path like "/images/zed.jpg".
 function imageUrl(champion) {
-  return champion.image_url ? `${API_BASE}${champion.image_url}` : null;
+  if (champion.image_url) return `${API_BASE}${champion.image_url}`;
+  if (champion.image) return `${API_BASE}/images/${champion.image}`;
+  return null;
 }
 
 /* =====================================================
