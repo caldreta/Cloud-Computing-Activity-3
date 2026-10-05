@@ -20,11 +20,12 @@ async function getRoster() {
   return data.characters;
 }
 
-// image_url comes back as a relative path like "/images/zed.jpg".
+// For now the images sit in an "images" folder next to index.html.
+// To serve them from the API instead, set IMAGE_BASE to `${API_BASE}/images/`.
+const IMAGE_BASE = "images/";
 function imageUrl(champion) {
-  if (champion.image_url) return `${API_BASE}${champion.image_url}`;
-  if (champion.image) return `${API_BASE}/images/${champion.image}`;
-  return null;
+  const file = champion.image || (champion.image_url ? champion.image_url.split("/").pop() : null);
+  return file ? `${IMAGE_BASE}${file}` : null;
 }
 
 /* =====================================================
@@ -76,9 +77,9 @@ const CATEGORIES = [
     name: "Matching",
     blurb: "Put champions where they belong.",
     modes: [
-      { name: "Match the Region", desc: "Sort champions into their home regions.", href: "#/matching/region", ready: false },
-      { name: "Lore Match", desc: "Pair each story with its champion.", href: "#/matching/lore", ready: false },
-      { name: "Role Sort", desc: "Drop each champion into the right role, against the clock.", href: "#/matching/role", ready: false },
+      { name: "Match the Region", desc: "Sort champions into their home regions.", href: "#/matching/region", ready: true },
+      { name: "Lore Match", desc: "Pair each story with its champion.", href: "#/matching/lore", ready: true },
+      { name: "Role Sort", desc: "Drop each champion into the right role, against the clock.", href: "#/matching/role", ready: true },
     ],
   },
 ];
@@ -100,6 +101,9 @@ const GAMES = {
   "quick/higher-lower": startHigherLower,
   "quick/odd-one-out": startOddOneOut,
   "quick/true-false": startTrueFalse,
+  "matching/region": startMatchRegion,
+  "matching/lore": startMatchLore,
+  "matching/role": startMatchRole,
 };
 
 function escapeHtml(text) {
@@ -124,11 +128,31 @@ function renderCategories() {
     </section>`).join("");
 }
 
+// Try to load one portrait so a broken image setup is obvious instead of silent.
+function checkImages(roster) {
+  const el = document.getElementById("image-status");
+  const url = roster.length ? imageUrl(roster[0]) : null;
+  if (!url) {
+    el.textContent = "The roster has no image paths, so portraits will show initials.";
+    el.dataset.state = "error";
+    return;
+  }
+  const probe = new Image();
+  probe.onload = () => { el.textContent = "Images are loading"; el.dataset.state = "ok"; };
+  probe.onerror = () => {
+    el.innerHTML = `Images aren't loading. Put the champion images in an "images" folder next to index.html. The first one should be at <code>${escapeHtml(url)}</code>.`;
+    el.dataset.state = "error";
+    console.error("Image failed to load:", url);
+  };
+  probe.src = url;
+}
+
 async function checkApi() {
   try {
     const roster = await getRoster();
     statusEl.textContent = `${roster.length} champions loaded`;
     statusEl.dataset.state = "ok";
+    checkImages(roster);
   } catch (err) {
     statusEl.textContent = "Couldn't reach the API. Check your connection or the API key, then reload.";
     statusEl.dataset.state = "error";
@@ -859,6 +883,220 @@ function startTrueFalse(root) {
     title: "True or False",
     intro: "A statement about a champion. Is it true?",
     makeRound: makeTrueFalseRound,
+  });
+}
+
+/* =====================================================
+   SECTION 9: MATCHING
+   One shared runner (startMatching) plus one board maker per game.
+   Pick a card from the tray, then pick the place it belongs.
+   A board maker returns:
+     { items:   [{ id, html, accepts: [targetId, ...] }],
+       targets: [{ id, html, capacity }] }
+   ===================================================== */
+function shortChampionHtml(champ) {
+  return `${portraitHtml(champ)}<span class="match-name">${escapeHtml(champ.name)}</span>`;
+}
+
+async function startMatching(root, { hash, title, intro, makeBoard }) {
+  const roster = await loadRosterFor(root, hash);
+  if (!roster) return;
+
+  root.innerHTML = `
+    <a class="back" href="#/">Back to games</a>
+    <header class="game-head"><h1>${title}</h1><p>${intro}</p></header>
+    <div id="match"></div>`;
+  watchBrokenImages(root);
+  const mount = root.querySelector("#match");
+
+  let board, placed, selected, mistakes, message, startedAt, finishedAt;
+
+  function newRun() {
+    board = makeBoard(roster);
+    placed = new Map();      // item id -> target id
+    selected = null;
+    mistakes = 0;
+    message = "";
+    startedAt = Date.now();
+    finishedAt = null;
+    render();
+  }
+
+  function render() {
+    const done = placed.size === board.items.length;
+    const remaining = board.items.filter((i) => !placed.has(i.id));
+    const status = done ? "All placed."
+      : message || (selected ? "Now choose where it belongs." : "Pick a card, then pick where it belongs.");
+
+    mount.innerHTML = `
+      <p class="match-status" role="status">${escapeHtml(status)} <span class="match-mistakes">Mistakes: ${mistakes}</span></p>
+      ${done ? "" : `<div class="match-tray" aria-label="Cards to place">${remaining.map((item) =>
+        `<button type="button" class="match-item" data-id="${escapeHtml(item.id)}" aria-pressed="${selected === item.id}">${item.html}</button>`
+      ).join("")}</div>`}
+      <div class="match-targets">${board.targets.map((t) => {
+        const inside = board.items.filter((i) => placed.get(i.id) === t.id);
+        const full = inside.length >= t.capacity;
+        return `<div class="match-target">
+          <button type="button" class="match-target-btn" data-id="${escapeHtml(t.id)}"${full ? ' aria-disabled="true"' : ""}>${t.html}</button>
+          <div class="match-placed">${inside.map((i) => `<div class="match-chip">${i.html}</div>`).join("")}</div>
+        </div>`;
+      }).join("")}</div>
+      ${done ? (() => {
+        const secs = Math.round((finishedAt - startedAt) / 1000);
+        return `<div class="result" data-status="won">
+          <div class="result-text"><h2>All matched</h2>
+          <p>${mistakes === 0 ? "No mistakes" : `${mistakes} ${mistakes === 1 ? "mistake" : "mistakes"}`} in ${secs} seconds.</p></div>
+          <button type="button" class="btn" id="again">Play again</button></div>`;
+      })() : ""}`;
+  }
+
+  // find a button by its data-id without building a selector (ids can contain spaces)
+  const byId = (selector, id) => [...mount.querySelectorAll(selector)].find((el) => el.dataset.id === id);
+
+  function focusItem(id) {
+    const el = id ? byId(".match-item", id) : mount.querySelector(".match-item");
+    if (el) el.focus();
+  }
+
+  mount.addEventListener("click", (e) => {
+    const again = e.target.closest("#again");
+    if (again) { newRun(); focusItem(null); return; }
+
+    const itemBtn = e.target.closest(".match-item");
+    if (itemBtn) {
+      selected = selected === itemBtn.dataset.id ? null : itemBtn.dataset.id;
+      message = "";
+      render();
+      focusItem(selected || itemBtn.dataset.id);
+      return;
+    }
+
+    const targetBtn = e.target.closest(".match-target-btn");
+    if (!targetBtn || targetBtn.getAttribute("aria-disabled") === "true") return;
+    if (!selected) { message = "Pick a card from the tray first."; render(); return; }
+
+    const item = board.items.find((i) => i.id === selected);
+    const targetId = targetBtn.dataset.id;
+    if (item.accepts.includes(targetId)) {
+      placed.set(item.id, targetId);
+      selected = null;
+      message = "";
+      if (placed.size === board.items.length) finishedAt = Date.now();
+      render();
+      if (finishedAt) mount.querySelector("#again").focus(); else focusItem(null);
+    } else {
+      mistakes++;
+      message = "Not there. Try another place.";
+      render();
+      focusItem(selected);
+      const bad = byId(".match-target-btn", targetId);
+      if (bad) { bad.dataset.flash = "wrong"; setTimeout(() => bad.removeAttribute("data-flash"), 700); }
+    }
+  });
+
+  newRun();
+}
+
+// Pick up to `count` values from a list, at random.
+const sample = (list, count) => shuffle(list).slice(0, count);
+
+/* ---------- Match the Region ---------- */
+function makeRegionBoard(roster) {
+  const attr = { key: "region", multi: true };
+  // only champions from a single region, so each card has exactly one right answer
+  const groups = new Map(); // normalized region -> { label, champs }
+  for (const c of roster) {
+    const tokens = tokensOf(c, attr);
+    if (tokens.length !== 1) continue;
+    const { norm, label } = tokens[0];
+    if (!groups.has(norm)) groups.set(norm, { label, champs: [] });
+    groups.get(norm).champs.push(c);
+  }
+  const chosen = sample([...groups.entries()].filter(([, g]) => g.champs.length >= 2), 3);
+  const items = [];
+  const targets = [];
+  for (const [norm, group] of chosen) {
+    targets.push({ id: norm, html: `<span class="target-title">${escapeHtml(group.label)}</span>`, capacity: Infinity });
+    for (const c of sample(group.champs, 2 + Math.floor(Math.random() * 2))) {
+      items.push({ id: `c${c.id}`, html: shortChampionHtml(c), accepts: [norm], champ: c });
+    }
+  }
+  return { items: shuffle(items), targets };
+}
+
+function startMatchRegion(root) {
+  return startMatching(root, {
+    hash: "#/matching/region",
+    title: "Match the Region",
+    intro: "Sort each champion into the region they come from.",
+    makeBoard: makeRegionBoard,
+  });
+}
+
+/* ---------- Role Sort ---------- */
+function makeRoleBoard(roster) {
+  const attr = { key: "role", multi: true };
+  const counts = new Map(); // normalized role -> { label, count }
+  for (const c of roster) {
+    for (const t of tokensOf(c, attr)) {
+      if (!counts.has(t.norm)) counts.set(t.norm, { label: t.label, count: 0 });
+      counts.get(t.norm).count++;
+    }
+  }
+  const candidates = [...counts.entries()].filter(([, r]) => r.count >= 3);
+
+  // champions that fit this role and none of the other chosen roles
+  const fitsFor = (norm, chosenNorms) => roster.filter((c) => {
+    const mine = tokensOf(c, attr).map((t) => t.norm).filter((n) => chosenNorms.includes(n));
+    return mine.length === 1 && mine[0] === norm;
+  });
+
+  // keep drawing three roles until each has at least two champions that fit only it
+  let chosen = sample(candidates, 3);
+  for (let i = 0; i < 100; i++) {
+    const norms = chosen.map(([norm]) => norm);
+    if (chosen.every(([norm]) => fitsFor(norm, norms).length >= 2)) break;
+    chosen = sample(candidates, 3);
+  }
+  const chosenNorms = chosen.map(([norm]) => norm);
+
+  const items = [];
+  const targets = [];
+  for (const [norm, role] of chosen) {
+    targets.push({ id: norm, html: `<span class="target-title">${escapeHtml(role.label)}</span>`, capacity: Infinity });
+    for (const c of sample(fitsFor(norm, chosenNorms), 2 + Math.floor(Math.random() * 2))) {
+      items.push({ id: `c${c.id}`, html: shortChampionHtml(c), accepts: [norm], champ: c });
+    }
+  }
+  return { items: shuffle(items), targets };
+}
+
+function startMatchRole(root) {
+  return startMatching(root, {
+    hash: "#/matching/role",
+    title: "Role Sort",
+    intro: "Drop each champion into its role. Some champions have two roles, so only the three roles shown count.",
+    makeBoard: makeRoleBoard,
+  });
+}
+
+/* ---------- Lore Match ---------- */
+function makeLoreBoard(roster) {
+  const picks = sample(roster, 5);
+  const items = picks.map((c) => {
+    const snippet = buildClues(c).filter((x) => x.kind === "lore").slice(0, 2).map((x) => x.text).join(" ");
+    return { id: `c${c.id}`, html: `<span class="snippet">${clueHtml(snippet)}</span>`, accepts: [`c${c.id}`], champ: c };
+  });
+  const targets = shuffle(picks).map((c) => ({ id: `c${c.id}`, html: shortChampionHtml(c), capacity: 1 }));
+  return { items: shuffle(items), targets };
+}
+
+function startMatchLore(root) {
+  return startMatching(root, {
+    hash: "#/matching/lore",
+    title: "Lore Match",
+    intro: "Each story has its champion's name hidden. Pair every story with the right champion.",
+    makeBoard: makeLoreBoard,
   });
 }
 
