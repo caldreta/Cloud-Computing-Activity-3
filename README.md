@@ -44,7 +44,7 @@ The API returns:
 
 ```json
 {
-  "count": 40,
+  "count": 50,
   "characters": [ { "...one object per champion..." } ]
 }
 ```
