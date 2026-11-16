@@ -4,23 +4,38 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Champion Games</title>
+  <meta name="description" content="Guess, sort and match League of Legends champions. Earn EXP and level up in eight game modes.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=Figtree:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Marcellus&family=Spline+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="page">
-    <nav id="account-bar" class="account-bar" aria-label="Account"></nav>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#/" aria-label="Champion Games home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Champion Games</span>
+      </a>
+      <nav id="account-bar" class="account-bar" aria-label="Account"></nav>
+    </div>
+  </header>
+
+  <div class="page" id="main">
     <div id="hub-screen">
-      <header class="site-head">
-        <h1>Champion Games</h1>
-        <p>Guess, sort and match champions from the roster. Pick a game to start.</p>
-        <div class="status-strip">
-          <div id="api-status" role="status">Loading roster…</div>
-          <div id="image-status" role="status"></div>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <h1 id="hero-title">Champion Games</h1>
+          <p>Guess, sort and match champions from the roster. Every finished game earns EXP towards your level in that mode.</p>
+          <div class="hero-actions">
+            <button type="button" id="random-game" class="btn">Play a random game</button>
+            <span id="hero-note" class="hero-note"></span>
+          </div>
         </div>
-      </header>
+        <div id="roster-strip" class="roster-strip" aria-hidden="true"></div>
+        <div id="api-status" class="api-status" role="status" hidden></div>
+      </section>
       <main id="categories"></main>
     </div>
     <main id="game-screen" hidden></main>

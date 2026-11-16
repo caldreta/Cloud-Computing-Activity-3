@@ -180,18 +180,59 @@ async function awardExp(slug, correct, total, onUpdate) {
   }
 
   const { exp_gained: gained, exp, level } = res.data;
+  const before = progressBySlug[slug] || 0;
   progressBySlug[slug] = exp;
   renderCategories();
   renderAccountBar();
   const into = exp % EXP_PER_LEVEL;
-  onUpdate(`<span class="reward-line"><strong>+${gained} EXP</strong> · Level ${level}${
-    level > levelBefore ? ` <span class="level-up">Level up!</span>` : ""}</span>
-    ${expBarHtml(into)}
-    <span class="reward-next">${into} / ${EXP_PER_LEVEL} EXP to level ${level + 1}</span>`);
+  const leveledUp = level > levelBefore;
+  // the bar starts where the player was, then fills to the new total
+  const from = leveledUp ? 0 : before % EXP_PER_LEVEL;
+  onUpdate(`<span class="reward-card${leveledUp ? " is-level-up" : ""}">
+      <span class="reward-crest" aria-hidden="true"><span>${level}</span></span>
+      <span class="reward-body">
+        <span class="reward-line"><strong class="reward-gain" data-count="${gained}">+${gained} EXP</strong>
+          <span class="reward-level">${leveledUp ? `Level up! You reached level ${level}` : `Level ${level}`}</span></span>
+        ${expBarHtml(into, from)}
+        <span class="reward-next">${EXP_PER_LEVEL - into} EXP to level ${level + 1}</span>
+      </span>
+    </span>`);
+  animateRewards();
+  if (leveledUp) showToast(`Level up! You reached level ${level}.`);
 }
 
-function expBarHtml(into) {
-  return `<span class="exp-bar" role="img" aria-label="${into} of ${EXP_PER_LEVEL} EXP towards the next level"><span style="width:${into}%"></span></span>`;
+const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// Fills EXP bars from their start width to their target, and counts the gained EXP up.
+function animateRewards() {
+  const bars = [...document.querySelectorAll(".exp-bar > span[data-to]")];
+  const counters = [...document.querySelectorAll("[data-count]")];
+  const finish = () => {
+    bars.forEach((el) => { el.style.width = `${el.dataset.to}%`; el.removeAttribute("data-to"); });
+    counters.forEach((el) => { el.textContent = `+${el.dataset.count} EXP`; el.removeAttribute("data-count"); });
+  };
+  if (reduceMotion()) { finish(); return; }
+  // two frames so the browser paints the start width before the transition begins
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    bars.forEach((el) => { el.style.width = `${el.dataset.to}%`; el.removeAttribute("data-to"); });
+  }));
+  counters.forEach((el) => {
+    const target = Number(el.dataset.count);
+    el.removeAttribute("data-count");
+    const started = performance.now();
+    const tick = (now) => {
+      const t = Math.min(1, (now - started) / 700);
+      el.textContent = `+${Math.round(target * (1 - Math.pow(1 - t, 3)))} EXP`;
+      if (t < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+// `from` (optional) is where the bar starts before animating to `into`.
+function expBarHtml(into, from) {
+  const animate = from !== undefined && from !== into;
+  return `<span class="exp-bar" role="img" aria-label="${into} of ${EXP_PER_LEVEL} EXP towards the next level"><span style="width:${animate ? from : into}%"${animate ? ` data-to="${into}"` : ""}></span></span>`;
 }
 
 let toastTimer;
@@ -204,25 +245,46 @@ function showToast(text) {
   toastTimer = setTimeout(() => { el.hidden = true; }, 3500);
 }
 
-// The strip at the top of every screen: guest links, or the signed-in player.
+function totalExp() {
+  return Object.values(progressBySlug).reduce((sum, exp) => sum + exp, 0);
+}
+
+// Overall level: one level per 100 EXP earned across every mode.
+function overallLevel() {
+  return levelFor(totalExp());
+}
+
+// The account area of the top bar: guest links, or the signed-in player's crest.
 function renderAccountBar() {
   const el = document.getElementById("account-bar");
   if (!el) return;
   const session = getSession();
   if (!session) {
-    el.innerHTML = `<span class="account-who">Playing as guest</span>
-      <a class="account-link" href="#/login">Log in</a>
+    el.innerHTML = `<a class="account-link" href="#/login">Log in</a>
       <a class="btn btn-small" href="#/register">Sign up</a>`;
-    return;
+  } else {
+    el.innerHTML = `<a class="player" href="#/account" title="See your progress">
+        <span class="crest" aria-hidden="true"><span>${overallLevel()}</span></span>
+        <span class="player-text"><span class="player-name">${escapeHtml(session.username)}</span>
+          <span class="player-sub">Level ${overallLevel()}, ${totalExp()} EXP</span></span>
+      </a>
+      <button type="button" class="account-link" data-action="logout">Log out</button>`;
+    el.querySelector("[data-action=logout]").addEventListener("click", () => {
+      logOut();
+      if (location.hash === "#/account") location.hash = "#/";
+    });
   }
-  const total = Object.values(progressBySlug).reduce((sum, exp) => sum + exp, 0);
-  el.innerHTML = `<span class="account-who">Signed in as <strong>${escapeHtml(session.username)}</strong> · ${total} EXP</span>
-    <a class="account-link" href="#/account">My progress</a>
-    <button type="button" class="account-link" data-action="logout">Log out</button>`;
-  el.querySelector("[data-action=logout]").addEventListener("click", () => {
-    logOut();
-    if (location.hash === "#/account") location.hash = "#/";
-  });
+  renderHeroNote();
+}
+
+// The line beside "Play a random game" on the hub.
+function renderHeroNote() {
+  const el = document.getElementById("hero-note");
+  if (!el) return;
+  const session = getSession();
+  el.innerHTML = session
+    ? `Welcome back, ${escapeHtml(session.username)}. You're level ${overallLevel()} overall.`
+    : `<a href="#/register">Create an account</a> to save your EXP.`;
 }
 
 /* =====================================================
@@ -310,58 +372,77 @@ function escapeHtml(text) {
 }
 
 // Level badge on a mode card, shown only when someone is logged in.
-function modeLevelHtml(href) {
+// Level and EXP bar at the foot of a mode card, shown only when someone is logged in.
+function modeProgressHtml(href) {
   if (!getSession()) return "";
   const exp = progressBySlug[href.slice(2)] || 0;
-  return `<span class="mode-level" title="${exp} EXP">Lv ${levelFor(exp)}</span>`;
+  return `<span class="mode-progress"><span class="mode-level">Level ${levelFor(exp)}</span>${expBarHtml(exp % EXP_PER_LEVEL)}</span>`;
 }
 
 function renderCategories() {
-  categoriesEl.innerHTML = CATEGORIES.map((cat, ci) => `
+  categoriesEl.innerHTML = CATEGORIES.map((cat) => `
     <section class="category" data-cat="${cat.id}" aria-labelledby="h-${cat.id}">
       <div class="category-head">
         <h2 id="h-${cat.id}">${cat.name}</h2>
         <p>${cat.blurb}</p>
       </div>
       <ul class="modes">
-        ${cat.modes.map((m, i) => m.ready
-          ? `<li style="--i:${ci * 3 + i}"><a class="mode mode-card" href="${m.href}">${modeLevelHtml(m.href)}<span class="mode-name">${m.name}</span><span class="mode-desc">${m.desc}</span><span class="mode-state">Play <span class="arrow" aria-hidden="true">→</span></span></a></li>`
-          : `<li style="--i:${ci * 3 + i}"><div class="mode mode-card is-locked"><span class="mode-name">${m.name}</span><span class="mode-desc">${m.desc}</span><span class="mode-state">Not built yet</span></div></li>`
+        ${cat.modes.map((m) => m.ready
+          ? `<li><a class="mode mode-card" href="${m.href}"><span class="mode-name">${m.name}</span><span class="mode-desc">${m.desc}</span>${modeProgressHtml(m.href)}</a></li>`
+          : `<li><div class="mode mode-card is-locked"><span class="mode-name">${m.name}</span><span class="mode-desc">${m.desc}</span><span class="mode-desc">Coming soon</span></div></li>`
         ).join("")}
       </ul>
     </section>`).join("");
 }
 
-// Try to load one portrait so a broken image setup is obvious instead of silent.
+// Portraits under the hub title: a random slice of the roster.
+function renderRosterStrip(roster) {
+  const el = document.getElementById("roster-strip");
+  if (!el) return;
+  el.innerHTML = shuffle(roster).slice(0, 14).map((c) => portraitHtml(c, "md")).join("");
+  [...el.children].forEach((child, n) => child.style.setProperty("--n", n));
+  watchBrokenImages(el);
+}
+
+// Report a broken image setup to developers in the console, not to players.
 function checkImages(roster) {
-  const el = document.getElementById("image-status");
   const url = roster.length ? imageUrl(roster[0]) : null;
-  if (!url) {
-    el.textContent = "The roster has no image paths, so portraits will show initials.";
-    el.dataset.state = "error";
-    return;
-  }
+  if (!url) { console.warn("The roster has no image paths, so portraits show initials."); return; }
   const probe = new Image();
-  probe.onload = () => { el.textContent = "Images are loading"; el.dataset.state = "ok"; };
-  probe.onerror = () => {
-    el.innerHTML = `Images aren't loading. Put the champion images in an "images" folder next to index.html. The first one should be at <code>${escapeHtml(url)}</code>.`;
-    el.dataset.state = "error";
-    console.error("Image failed to load:", url);
-  };
+  probe.onerror = () => console.error(`Champion images aren't loading. Expected the first one at ${url}`);
   probe.src = url;
 }
 
 async function checkApi() {
+  statusEl.hidden = true;
   try {
     const roster = await getRoster();
-    statusEl.textContent = `${roster.length} champions loaded`;
-    statusEl.dataset.state = "ok";
+    renderRosterStrip(roster);
     checkImages(roster);
   } catch (err) {
-    statusEl.textContent = "Couldn't reach the API. Check your connection or the API key, then reload.";
-    statusEl.dataset.state = "error";
     console.error(err);
+    statusEl.hidden = false;
+    statusEl.innerHTML = `<span>The champion roster didn't load, so the games can't start yet. Check your internet connection, then try again.</span>
+      <button type="button" class="btn-quiet" data-action="retry">Try again</button>`;
+    statusEl.querySelector("[data-action=retry]").addEventListener("click", () => {
+      try { sessionStorage.removeItem(CACHE_KEY); } catch { /* ignore */ }
+      checkApi();
+    });
   }
+}
+
+const CATEGORY_NAMES = { loldle: "Loldle", quick: "Quick decisions", matching: "Matching", account: "Account" };
+
+// "All games / Loldle" trail at the top of every game and account page.
+function crumbHtml() {
+  const name = CATEGORY_NAMES[gameScreen.dataset.cat] || "";
+  return `<nav class="crumb" aria-label="Breadcrumb"><a href="#/">All games</a>${
+    name ? `<span class="crumb-sep" aria-hidden="true">/</span><span aria-current="page">${name}</span>` : ""}</nav>`;
+}
+
+function playRandomGame() {
+  const modes = CATEGORIES.flatMap((c) => c.modes.filter((m) => m.ready));
+  location.hash = pickRandom(modes).href;
 }
 
 // Account pages, routed the same way as games.
@@ -380,11 +461,18 @@ function route() {
     hubScreen.hidden = true;
     gameScreen.hidden = false;
     window.scrollTo(0, 0);
+    document.title = `${pageTitle(key)} | Champion Games`;
     start(gameScreen);
   } else {
     hubScreen.hidden = false;
     gameScreen.hidden = true;
+    document.title = "Champion Games";
   }
+}
+
+function pageTitle(key) {
+  const mode = CATEGORIES.flatMap((c) => c.modes).find((m) => m.href === `#/${key}`);
+  return mode ? mode.name : { login: "Log in", register: "Sign up", account: "My progress" }[key] || "Champion Games";
 }
 
 /* =====================================================
@@ -414,7 +502,7 @@ async function loadRosterFor(root, hash) {
     roster = await getRoster();
   } catch (err) {
     console.error(err);
-    root.innerHTML = `<a class="back" href="#/">Back to games</a>
+    root.innerHTML = `${crumbHtml()}
       <p class="error">Couldn't load the roster. Check the API and reload the page.</p>`;
     return null;
   }
@@ -598,7 +686,7 @@ async function startClassic(root) {
   let status = "playing";    // "playing" | "won" | "gaveUp"
 
   root.innerHTML = `
-    <a class="back" href="#/">Back to games</a>
+    ${crumbHtml()}
     <header class="game-head">
       <h1>Classic</h1>
       <p>Guess the secret champion. Each guess shows how close it is.</p>
@@ -748,7 +836,7 @@ async function startLore(root) {
   let guessCount = 0;
 
   root.innerHTML = `
-    <a class="back" href="#/">Back to games</a>
+    ${crumbHtml()}
     <header class="game-head">
       <h1>Lore</h1>
       <p>Who is this champion? Their name is hidden. Each wrong guess unlocks another clue.</p>
@@ -887,7 +975,7 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
   if (!roster) return;
 
   root.innerHTML = `
-    <a class="back" href="#/">Back to games</a>
+    ${crumbHtml()}
     <header class="game-head"><h1>${title}</h1><p>${intro}</p></header>
     <div id="quiz"></div>`;
   watchBrokenImages(root);
@@ -897,30 +985,58 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
   let index = 0;
   let score = 0;
   let answered = null;       // index of the chosen option, or null
+  let results = [];          // true / false per answered question, for the progress track
 
   function newRun() {
     const used = new Set();
     rounds = Array.from({ length: ROUNDS_PER_GAME }, () => makeRound(roster, used));
     index = 0;
     score = 0;
+    results = [];
     renderRound();
+  }
+
+  // Ten segments: green for right, red for wrong, outlined for the current question.
+  function trackHtml() {
+    const segments = Array.from({ length: ROUNDS_PER_GAME }, (_, k) => {
+      const state = k < results.length ? (results[k] ? "right" : "wrong") : k === index ? "current" : "todo";
+      return `<span class="track-seg" data-state="${state}"></span>`;
+    }).join("");
+    return `<div class="quiz-status">
+        <div class="quiz-track" aria-hidden="true">${segments}</div>
+        <p class="quiz-count" role="status">Question ${index + 1} of ${ROUNDS_PER_GAME}<span>Score ${score}</span></p>
+      </div>`;
   }
 
   function renderRound() {
     const round = rounds[index];
     answered = null;
+    const count = round.options.length;
     quiz.innerHTML = `
-      <p id="progress" class="quiz-progress" role="status">Question ${index + 1} of ${ROUNDS_PER_GAME} · Score ${score}</p>
+      <div id="progress">${trackHtml()}</div>
       ${round.visual ? `<div class="quiz-visual">${round.visual}</div>` : ""}
       <h2 class="quiz-prompt">${round.prompt}</h2>
       <div class="quiz-options" data-layout="${round.layout}">
-        ${round.options.map((o, i) => `<button type="button" class="quiz-option" data-i="${i}" style="--i:${i}">${o.html}<span class="quiz-mark" aria-hidden="true"></span></button>`).join("")}
+        ${round.options.map((o, i) => `<button type="button" class="quiz-option" data-i="${i}" style="--i:${i}"><span class="key-hint" aria-hidden="true">${i + 1}</span>${o.html}<span class="quiz-mark" aria-hidden="true"></span></button>`).join("")}
       </div>
+      <p class="quiz-keys">Tip: press ${count === 2 ? "1 or 2" : `1 to ${count}`} to answer, then Enter for the next question.</p>
       <div id="feedback" class="quiz-feedback" aria-live="polite"></div>`;
     quiz.querySelectorAll(".quiz-option").forEach((btn) => {
       btn.addEventListener("click", () => answer(Number(btn.dataset.i)));
     });
   }
+
+  // Number keys answer the current question while this quiz is on screen.
+  function onKey(e) {
+    if (!quiz.isConnected) { document.removeEventListener("keydown", onKey); return; }
+    if (e.altKey || e.ctrlKey || e.metaKey || answered !== null || !rounds[index]) return;
+    const n = Number(e.key);
+    if (Number.isInteger(n) && n >= 1 && n <= rounds[index].options.length) {
+      e.preventDefault();
+      answer(n - 1);
+    }
+  }
+  document.addEventListener("keydown", onKey);
 
   function answer(i) {
     if (answered !== null) return;
@@ -928,6 +1044,7 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
     const round = rounds[index];
     const right = round.options[i].correct;
     if (right) score++;
+    results.push(right);
 
     quiz.querySelectorAll(".quiz-option").forEach((btn, k) => {
       const isCorrect = round.options[k].correct;
@@ -935,24 +1052,25 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
       btn.dataset.state = isCorrect ? "correct" : k === i ? "wrong" : "dim";
       btn.querySelector(".quiz-mark").textContent = isCorrect ? "✓" : k === i ? "✕" : "";
     });
-    quiz.querySelector("#progress").textContent =
-      `Question ${index + 1} of ${ROUNDS_PER_GAME} · Score ${score}`;
+    quiz.querySelector("#progress").innerHTML = trackHtml();
 
     const last = index === ROUNDS_PER_GAME - 1;
     const feedback = quiz.querySelector("#feedback");
     feedback.innerHTML = `
-      <p class="quiz-verdict" data-good="${right}">${right ? "Correct." : "Not quite."}</p>
+      <p class="quiz-verdict" data-good="${right}">${right ? "Correct" : "Not quite"}</p>
       <p class="quiz-explain">${round.explain}</p>
       <button type="button" class="btn" id="next">${last ? "See results" : "Next question"}</button>`;
     const next = feedback.querySelector("#next");
     next.addEventListener("click", () => { last ? renderEnd() : (index++, renderRound()); });
-    next.focus();
+    next.focus({ preventScroll: true });
+    // on small screens the explanation sits below the cards, so bring it into view
+    feedback.scrollIntoView({ block: "nearest", behavior: reduceMotion() ? "auto" : "smooth" });
   }
 
   function renderEnd() {
     const verdict = score >= 9 ? "Superb." : score >= 7 ? "Nicely done." : score >= 5 ? "Not bad." : "Room to improve.";
-    quiz.innerHTML = `<div class="result" data-status="won">
-      <div class="result-text"><h2>${score} out of ${ROUNDS_PER_GAME}</h2><p>${verdict}</p>
+    quiz.innerHTML = `${trackHtml().replace(/Question \d+ of \d+/, "Finished")}<div class="result" data-status="won">
+      <div class="result-text"><h2><span class="num">${score}</span> out of <span class="num">${ROUNDS_PER_GAME}</span></h2><p>${verdict}</p>
         <p class="reward" data-reward></p></div>
       <button type="button" class="btn" id="again">Play again</button>
     </div>`;
@@ -1129,7 +1247,7 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
   if (!roster) return;
 
   root.innerHTML = `
-    <a class="back" href="#/">Back to games</a>
+    ${crumbHtml()}
     <header class="game-head"><h1>${title}</h1><p>${intro}</p></header>
     <div id="match"></div>`;
   watchBrokenImages(root);
@@ -1366,7 +1484,7 @@ function startAuth(root, mode) {
   const isLogin = mode === "login";
   const session = getSession();
   if (session) {
-    root.innerHTML = `<a class="back" href="#/">Back to games</a>
+    root.innerHTML = `${crumbHtml()}
       <header class="game-head"><h1>You're signed in</h1>
         <p>You're already logged in as <strong>${escapeHtml(session.username)}</strong>.</p></header>
       <a class="btn" href="#/account">See my progress</a>`;
@@ -1374,7 +1492,7 @@ function startAuth(root, mode) {
   }
 
   root.innerHTML = `
-    <a class="back" href="#/">Back to games</a>
+    ${crumbHtml()}
     <header class="game-head">
       <h1>${isLogin ? "Log in" : "Sign up"}</h1>
       <p>${isLogin
@@ -1437,7 +1555,7 @@ function startAuth(root, mode) {
 async function startAccount(root) {
   const session = getSession();
   if (!session) {
-    root.innerHTML = `<a class="back" href="#/">Back to games</a>
+    root.innerHTML = `${crumbHtml()}
       <header class="game-head"><h1>My progress</h1>
         <p>Log in to see your EXP and levels for every game mode.</p></header>
       <div class="auth-actions"><a class="btn" href="#/login">Log in</a> <a class="btn-quiet" href="#/register">Sign up</a></div>`;
@@ -1445,7 +1563,7 @@ async function startAccount(root) {
   }
 
   root.innerHTML = `
-    <a class="back" href="#/">Back to games</a>
+    ${crumbHtml()}
     <header class="game-head">
       <h1>My progress</h1>
       <p>Signed in as <strong>${escapeHtml(session.username)}</strong>. Finished games earn 10 EXP per correct answer,
@@ -1503,7 +1621,7 @@ async function startAccount(root) {
         const exp = progressBySlug[m.href.slice(2)] || 0;
         return `<li>
           <a class="progress-name" href="${m.href}">${m.name}</a>
-          <span class="progress-level">Lv ${levelFor(exp)}</span>
+          <span class="progress-level">Level ${levelFor(exp)}</span>
           ${expBarHtml(exp % EXP_PER_LEVEL)}
           <span class="progress-exp">${exp} EXP</span>
         </li>`;
@@ -1514,6 +1632,7 @@ async function startAccount(root) {
 /* =====================================================
    START
    ===================================================== */
+document.getElementById("random-game").addEventListener("click", playRandomGame);
 renderAccountBar();
 renderCategories();
 checkApi();
