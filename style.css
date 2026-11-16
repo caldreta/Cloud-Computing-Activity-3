@@ -322,6 +322,96 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .match-targets + .result { margin-top: 1.75rem; }
 
 /* =====================================================
+   ACCOUNTS: bar, EXP rewards, forms, progress page
+   ===================================================== */
+a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
+.btn-small { padding: .5rem .95rem; font-size: .72rem; }
+.btn:disabled { opacity: .6; cursor: wait; filter: none; transform: none; }
+
+/* account strip at the top of every screen */
+.account-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .4rem 1rem;
+  margin: -1.75rem 0 1.75rem; font-size: .85rem;
+}
+.account-who { color: var(--muted); margin-right: auto; }
+.account-who strong { color: var(--gold-hi); }
+.account-link {
+  padding: 0; color: var(--gold); font: 700 .78rem var(--font-body); letter-spacing: .12em; text-transform: uppercase;
+  text-decoration: none; background: none; border: 0;
+}
+.account-link:hover, .account-link:focus-visible { color: var(--gold-hi); }
+
+/* level badge on hub cards */
+.mode-level {
+  position: absolute; top: .85rem; right: .95rem; padding: .15rem .55rem;
+  color: var(--accent); font: 800 .72rem var(--font-body); letter-spacing: .12em;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); border-radius: 2px;
+  background: rgba(1, 10, 19, .6);
+}
+
+/* EXP reward inside result panels */
+.reward:empty { display: none; }
+.reward { display: grid; gap: .35rem; margin-top: .65rem !important; color: var(--muted); font-size: .9rem; }
+.reward a { color: var(--gold); }
+.reward strong { color: var(--teal); }
+.reward-next { font-size: .8rem; }
+.level-up {
+  display: inline-block; margin-left: .35rem; padding: .05rem .5rem; color: #1a1306;
+  font-weight: 800; font-size: .75rem; letter-spacing: .1em; text-transform: uppercase;
+  background: linear-gradient(180deg, #ecd9a8, #c8aa6e); border-radius: 2px;
+}
+.exp-bar {
+  display: block; width: 100%; max-width: 16rem; height: .45rem; overflow: hidden;
+  background: rgba(255, 255, 255, .06); border: 1px solid var(--line-strong); border-radius: 2px;
+}
+.exp-bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--teal), var(--gold)); }
+
+/* login, sign-up and delete forms */
+#game-screen[data-cat="account"] .game-head::before { content: "◆  Account"; }
+.auth-form { display: grid; gap: .9rem; max-width: 24rem; }
+.auth-form label { display: grid; gap: .4rem; color: var(--gold-hi); font-weight: 600; font-size: .9rem; }
+.auth-form input {
+  padding: .8rem 1rem; color: var(--gold-hi); font: 600 1rem var(--font-body);
+  background: #050d1b; border: 1px solid var(--line-strong); border-radius: 2px; box-shadow: inset 0 2px 8px rgba(0, 0, 0, .5);
+}
+.auth-form input:focus { outline: none; border-color: var(--gold); box-shadow: inset 0 2px 8px rgba(0, 0, 0, .5), 0 0 0 1px var(--gold); }
+.auth-form .btn { justify-self: start; }
+.field-hint { margin: -.5rem 0 0; color: var(--muted); font-size: .8rem; }
+.form-error { margin: 0; padding: .6rem .8rem; color: #ffb3b9; font-size: .9rem; background: rgba(179, 52, 63, .15); border: 1px solid #7a2a33; border-radius: 2px; }
+.auth-switch { margin: 0; color: var(--muted); font-size: .9rem; }
+.auth-switch a, .game-head p a { color: var(--gold); }
+.auth-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
+
+/* My progress page */
+.progress-cat { --accent: var(--loldle); margin-bottom: 1.75rem; }
+.progress-cat[data-cat="quick"] { --accent: var(--quick); }
+.progress-cat[data-cat="matching"] { --accent: var(--matching); }
+.progress-cat h2 { margin: 0 0 .6rem; color: var(--accent); font: 700 1rem var(--font-head); letter-spacing: .14em; text-transform: uppercase; }
+.progress-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; }
+.progress-rows li {
+  display: grid; grid-template-columns: minmax(8rem, 1fr) 4rem minmax(6rem, 16rem) 5.5rem; align-items: center; gap: .9rem;
+  padding: .7rem 1rem; background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  border: 1px solid var(--line); border-radius: var(--radius);
+}
+.progress-name { color: var(--gold-hi); font-weight: 700; text-decoration: none; }
+.progress-name:hover { color: var(--accent); }
+.progress-level { color: var(--accent); font-weight: 800; font-size: .85rem; letter-spacing: .08em; }
+.progress-exp { color: var(--muted); font-size: .85rem; text-align: right; }
+
+.danger-zone { margin-top: 2.5rem; padding: 1.25rem 1.4rem; border: 1px solid #7a2a33; border-radius: var(--radius); background: rgba(179, 52, 63, .06); }
+.danger-zone h2 { margin: 0 0 .35rem; color: #ff8a93; font: 700 1rem var(--font-head); letter-spacing: .12em; text-transform: uppercase; }
+.danger-zone > p { margin: 0 0 1rem; color: var(--muted); }
+.btn-danger { color: #fff; background: linear-gradient(180deg, #d0525d, #b3343f 55%, #8a2530); border-color: rgba(255, 180, 185, .5); }
+.btn-danger:hover { box-shadow: 0 0 22px rgba(179, 52, 63, .5); }
+
+/* small notification at the bottom of the screen */
+.toast {
+  position: fixed; left: 50%; bottom: 1.5rem; z-index: 50; transform: translateX(-50%);
+  max-width: calc(100% - 2rem); padding: .75rem 1.2rem; color: var(--gold-hi); font-weight: 600;
+  background: #0b1830; border: 1px solid var(--gold-lo); border-radius: 2px; box-shadow: var(--shadow-md);
+}
+
+/* =====================================================
    MOTION (skipped for people who ask for less)
    ===================================================== */
 @media (prefers-reduced-motion: no-preference) {
@@ -373,6 +463,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 }
 @media (max-width: 34rem) {
   .page { padding: 2rem 1rem 4rem; }
+  .account-bar { margin-top: -1rem; }
+  .account-who { flex-basis: 100%; }
+  .progress-rows li { grid-template-columns: 1fr auto; }
+  .progress-rows .exp-bar { grid-column: 1 / -1; max-width: none; }
+  .progress-exp { text-align: left; }
   .match-tray { gap: .6rem; }
   .match-item[data-kind="champion"] { width: calc(33.333% - .4rem); padding: .4rem .4rem .6rem; }
   .match-item[data-kind="champion"] .match-name { font-size: .78rem; }

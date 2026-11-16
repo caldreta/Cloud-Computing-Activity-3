@@ -3,7 +3,8 @@
    ===================================================== */
 const API_BASE = "https://cloud-computing-activity.vercel.app";
 const API_KEY = "arceo-api-key-123";
-const CACHE_KEY = "moba-hub:roster:v1";
+// v2: the database API stores image paths as "league/<file>", so old cached rosters are skipped
+const CACHE_KEY = "moba-hub:roster:v2";
 
 // Fetch the whole roster once, then reuse it for the rest of the session.
 async function getRoster() {
@@ -26,6 +27,202 @@ const IMAGE_BASE = "images/";
 function imageUrl(champion) {
   const file = champion.image || (champion.image_url ? champion.image_url.split("/").pop() : null);
   return file ? `${IMAGE_BASE}${file}` : null;
+}
+
+/* =====================================================
+   SECTION 1B: ACCOUNTS AND EXP
+   Sign-up, login, progress and account deletion all use the API.
+   The login token is kept in localStorage until it expires.
+   ===================================================== */
+const SESSION_KEY = "moba-hub:session";
+const EXP_PER_LEVEL = 100; // must match EXP_PER_LEVEL in the API's rules.py
+
+let progressBySlug = {};   // game mode slug -> total EXP, filled after login
+
+function getSession() {
+  try {
+    const session = JSON.parse(localStorage.getItem(SESSION_KEY));
+    if (session && session.token && session.expiresAt > Date.now()) return session;
+  } catch { /* storage blocked or corrupted: treat as logged out */ }
+  return null;
+}
+
+function saveSession(session) {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch { /* ignore */ }
+}
+
+function clearSession() {
+  try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+  progressBySlug = {};
+  renderAccountBar();
+  renderCategories();
+}
+
+function levelFor(exp) {
+  return 1 + Math.floor(exp / EXP_PER_LEVEL);
+}
+
+// Turns any API error body into one readable sentence.
+function errorMessage(data, fallback) {
+  const detail = data && data.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length) {
+    return detail.map((d) => {
+      const field = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : "";
+      return field && field !== "body" ? `${field}: ${d.msg}` : d.msg;
+    }).join(" ");
+  }
+  return fallback;
+}
+
+// Calls the API and returns { ok, status, data }. Never throws.
+// With auth: true it sends the login token, and logs the player out if the token is rejected.
+async function api(path, { method = "GET", body, auth = false } = {}) {
+  const headers = {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (auth) {
+    const session = getSession();
+    if (!session) return { ok: false, status: 401, data: { detail: "Please log in first." } };
+    headers.Authorization = `Bearer ${session.token}`;
+  }
+
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    console.error(err);
+    return { ok: false, status: 0, data: { detail: "Couldn't reach the server. Check your connection." } };
+  }
+
+  let data = null;
+  if (res.status !== 204) {
+    try { data = await res.json(); } catch { /* empty or non-JSON body */ }
+  }
+  if (auth && res.status === 401) {
+    clearSession();
+    showToast("Your session has ended. Please log in again.");
+  }
+  return { ok: res.ok, status: res.status, data };
+}
+
+async function logIn(username, password) {
+  const res = await api("/api/v1/auth/login", { method: "POST", body: { username, password } });
+  if (!res.ok) return res;
+  // expire the stored token a little early so it is never sent after the server stops accepting it
+  saveSession({
+    token: res.data.access_token,
+    expiresAt: Date.now() + (res.data.expires_in - 30) * 1000,
+    username,
+  });
+  const me = await api("/api/v1/users/me", { auth: true });
+  if (me.ok) saveSession({ ...getSession(), username: me.data.username });
+  await refreshProgress();
+  renderAccountBar();
+  return res;
+}
+
+async function signUp(username, password) {
+  const res = await api("/api/v1/auth/register", { method: "POST", body: { username, password } });
+  if (!res.ok) return res;
+  return logIn(username, password);
+}
+
+function logOut() {
+  clearSession();
+  showToast("You've logged out.");
+}
+
+// Loads the player's EXP for every game mode.
+async function refreshProgress() {
+  if (!getSession()) { progressBySlug = {}; return; }
+  const res = await api("/api/v1/users/me/progress", { auth: true });
+  if (res.ok) {
+    progressBySlug = Object.fromEntries(res.data.progress.map((p) => [p.slug, p.exp]));
+    renderCategories();
+    renderAccountBar();
+  }
+}
+
+// Loldle scoring: fewer guesses earn more EXP. 1 guess = 10 of 10, 10 or more guesses = 1 of 10.
+function guessScore(guessCount) {
+  return { correct: Math.max(1, Math.min(10, 11 - guessCount)), total: 10 };
+}
+
+// Shows a reward message inside the result panel of `container`.
+function setReward(container, html) {
+  const el = container.querySelector("[data-reward]");
+  if (el) el.innerHTML = html;
+}
+
+// Sends a finished game's score to the API. onUpdate(html) receives each message to show.
+// The API works out the EXP itself, so the browser only reports the score.
+async function awardExp(slug, correct, total, onUpdate) {
+  if (!getSession()) {
+    onUpdate(`<a href="#/login">Log in</a> or <a href="#/register">sign up</a> to earn EXP and level up.`);
+    return;
+  }
+  onUpdate("Saving your progress…");
+  const levelBefore = levelFor(progressBySlug[slug] || 0);
+  const res = await api(`/api/v1/users/me/progress/${slug}`, {
+    method: "PATCH",
+    body: { correct_answers: correct, total_questions: total },
+    auth: true,
+  });
+  if (!res.ok) {
+    onUpdate(res.status === 401
+      ? `Your session ended, so this game wasn't saved. <a href="#/login">Log in again</a>.`
+      : `Couldn't save your progress: ${escapeHtml(errorMessage(res.data, "unknown error"))}`);
+    return;
+  }
+
+  const { exp_gained: gained, exp, level } = res.data;
+  progressBySlug[slug] = exp;
+  renderCategories();
+  renderAccountBar();
+  const into = exp % EXP_PER_LEVEL;
+  onUpdate(`<span class="reward-line"><strong>+${gained} EXP</strong> · Level ${level}${
+    level > levelBefore ? ` <span class="level-up">Level up!</span>` : ""}</span>
+    ${expBarHtml(into)}
+    <span class="reward-next">${into} / ${EXP_PER_LEVEL} EXP to level ${level + 1}</span>`);
+}
+
+function expBarHtml(into) {
+  return `<span class="exp-bar" role="img" aria-label="${into} of ${EXP_PER_LEVEL} EXP towards the next level"><span style="width:${into}%"></span></span>`;
+}
+
+let toastTimer;
+function showToast(text) {
+  const el = document.getElementById("toast");
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 3500);
+}
+
+// The strip at the top of every screen: guest links, or the signed-in player.
+function renderAccountBar() {
+  const el = document.getElementById("account-bar");
+  if (!el) return;
+  const session = getSession();
+  if (!session) {
+    el.innerHTML = `<span class="account-who">Playing as guest</span>
+      <a class="account-link" href="#/login">Log in</a>
+      <a class="btn btn-small" href="#/register">Sign up</a>`;
+    return;
+  }
+  const total = Object.values(progressBySlug).reduce((sum, exp) => sum + exp, 0);
+  el.innerHTML = `<span class="account-who">Signed in as <strong>${escapeHtml(session.username)}</strong> · ${total} EXP</span>
+    <a class="account-link" href="#/account">My progress</a>
+    <button type="button" class="account-link" data-action="logout">Log out</button>`;
+  el.querySelector("[data-action=logout]").addEventListener("click", () => {
+    logOut();
+    if (location.hash === "#/account") location.hash = "#/";
+  });
 }
 
 /* =====================================================
@@ -112,6 +309,13 @@ function escapeHtml(text) {
   ));
 }
 
+// Level badge on a mode card, shown only when someone is logged in.
+function modeLevelHtml(href) {
+  if (!getSession()) return "";
+  const exp = progressBySlug[href.slice(2)] || 0;
+  return `<span class="mode-level" title="${exp} EXP">Lv ${levelFor(exp)}</span>`;
+}
+
 function renderCategories() {
   categoriesEl.innerHTML = CATEGORIES.map((cat, ci) => `
     <section class="category" data-cat="${cat.id}" aria-labelledby="h-${cat.id}">
@@ -121,7 +325,7 @@ function renderCategories() {
       </div>
       <ul class="modes">
         ${cat.modes.map((m, i) => m.ready
-          ? `<li style="--i:${ci * 3 + i}"><a class="mode mode-card" href="${m.href}"><span class="mode-name">${m.name}</span><span class="mode-desc">${m.desc}</span><span class="mode-state">Play <span class="arrow" aria-hidden="true">→</span></span></a></li>`
+          ? `<li style="--i:${ci * 3 + i}"><a class="mode mode-card" href="${m.href}">${modeLevelHtml(m.href)}<span class="mode-name">${m.name}</span><span class="mode-desc">${m.desc}</span><span class="mode-state">Play <span class="arrow" aria-hidden="true">→</span></span></a></li>`
           : `<li style="--i:${ci * 3 + i}"><div class="mode mode-card is-locked"><span class="mode-name">${m.name}</span><span class="mode-desc">${m.desc}</span><span class="mode-state">Not built yet</span></div></li>`
         ).join("")}
       </ul>
@@ -160,12 +364,19 @@ async function checkApi() {
   }
 }
 
+// Account pages, routed the same way as games.
+const PAGES = {
+  login: (root) => startAuth(root, "login"),
+  register: (root) => startAuth(root, "register"),
+  account: startAccount,
+};
+
 function route() {
   const key = location.hash.replace(/^#\//, "");
-  const start = GAMES[key];
+  const start = GAMES[key] || PAGES[key];
   gameScreen.innerHTML = "";
   if (start) {
-    gameScreen.dataset.cat = key.split("/")[0];
+    gameScreen.dataset.cat = GAMES[key] ? key.split("/")[0] : "account";
     hubScreen.hidden = true;
     gameScreen.hidden = false;
     window.scrollTo(0, 0);
@@ -224,7 +435,8 @@ function resultPanelHtml(secret, status, guessCount) {
     : escapeHtml(secret.title);
   return `<div class="result" data-status="${status}">
     ${portraitHtml(secret, "lg")}
-    <div class="result-text"><h2>${headline}</h2><p>${detail}</p></div>
+    <div class="result-text"><h2>${headline}</h2><p>${detail}</p>
+      <p class="reward" data-reward>${status === "won" ? "" : "Revealing the answer earns no EXP."}</p></div>
     <button type="button" class="btn" data-action="new-game">New game</button>
   </div>`;
 }
@@ -420,6 +632,11 @@ async function startClassic(root) {
     if (champ.id === secret.id) status = "won";
     render();
     if (status === "playing") picker.focus();
+    if (status === "won") {
+      const round = secret;
+      const { correct, total } = guessScore(guesses.length);
+      awardExp("loldle/classic", correct, total, (html) => { if (secret === round) setReward(result, html); });
+    }
   }
 
   function newGame() {
@@ -562,6 +779,11 @@ async function startLore(root) {
     else wrong.push(champ);
     render();
     if (status === "playing") picker.focus();
+    if (status === "won") {
+      const round = secret;
+      const { correct, total } = guessScore(guessCount);
+      awardExp("loldle/lore", correct, total, (html) => { if (secret === round) setReward(result, html); });
+    }
   }
 
   function newGame() {
@@ -730,12 +952,15 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
   function renderEnd() {
     const verdict = score >= 9 ? "Superb." : score >= 7 ? "Nicely done." : score >= 5 ? "Not bad." : "Room to improve.";
     quiz.innerHTML = `<div class="result" data-status="won">
-      <div class="result-text"><h2>${score} out of ${ROUNDS_PER_GAME}</h2><p>${verdict}</p></div>
+      <div class="result-text"><h2>${score} out of ${ROUNDS_PER_GAME}</h2><p>${verdict}</p>
+        <p class="reward" data-reward></p></div>
       <button type="button" class="btn" id="again">Play again</button>
     </div>`;
     const again = quiz.querySelector("#again");
     again.addEventListener("click", newRun);
     again.focus();
+    const run = rounds;
+    awardExp(hash.slice(2), score, ROUNDS_PER_GAME, (html) => { if (rounds === run) setReward(quiz, html); });
   }
 
   newRun();
@@ -911,6 +1136,7 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
   const mount = root.querySelector("#match");
 
   let board, placed, selected, mistakes, message, startedAt, finishedAt;
+  let reward = "";          // EXP message for the finished board, kept across re-renders
   let animateIn = true;     // cards slide in on a fresh board only, not on every click
   let lastPlaced = null;    // id of the card just placed, so only it pops
 
@@ -922,6 +1148,7 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
     message = "";
     startedAt = Date.now();
     finishedAt = null;
+    reward = "";
     animateIn = true;
     lastPlaced = null;
     render();
@@ -953,7 +1180,8 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
         const secs = Math.round((finishedAt - startedAt) / 1000);
         return `<div class="result" data-status="won">
           <div class="result-text"><h2>All matched</h2>
-          <p>${mistakes === 0 ? "No mistakes" : `${mistakes} ${mistakes === 1 ? "mistake" : "mistakes"}`} in ${secs} seconds.</p></div>
+          <p>${mistakes === 0 ? "No mistakes" : `${mistakes} ${mistakes === 1 ? "mistake" : "mistakes"}`} in ${secs} seconds.</p>
+          <p class="reward" data-reward>${reward}</p></div>
           <button type="button" class="btn" id="again">Play again</button></div>`;
       })() : ""}`;
   }
@@ -992,7 +1220,17 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
       message = "";
       if (placed.size === board.items.length) finishedAt = Date.now();
       render();
-      if (finishedAt) mount.querySelector("#again").focus(); else focusItem(null);
+      if (finishedAt) {
+        mount.querySelector("#again").focus();
+        // every mistake costs one correct answer
+        const run = board;
+        const total = board.items.length;
+        awardExp(hash.slice(2), Math.max(0, total - mistakes), total, (html) => {
+          if (board !== run) return;
+          reward = html;
+          setReward(mount, html);
+        });
+      } else focusItem(null);
     } else {
       mistakes++;
       message = "Not there. Try another place.";
@@ -1110,9 +1348,176 @@ function startMatchLore(root) {
 }
 
 /* =====================================================
+   SECTION 10: ACCOUNT PAGES
+   #/login, #/register and #/account (progress + delete account)
+   ===================================================== */
+
+// Same rules as the API's RegisterRequest, checked first so mistakes show instantly.
+function signUpProblem(username, password, confirm) {
+  if (username.length < 3 || username.length > 50) return "Your username must be 3 to 50 characters.";
+  if (!/^[A-Za-z0-9_]+$/.test(username)) return "Your username can only use letters, numbers and underscores.";
+  if (password.length < 8) return "Your password must be at least 8 characters.";
+  if (password.length > 128) return "Your password can be at most 128 characters.";
+  if (password !== confirm) return "The two passwords don't match.";
+  return "";
+}
+
+function startAuth(root, mode) {
+  const isLogin = mode === "login";
+  const session = getSession();
+  if (session) {
+    root.innerHTML = `<a class="back" href="#/">Back to games</a>
+      <header class="game-head"><h1>You're signed in</h1>
+        <p>You're already logged in as <strong>${escapeHtml(session.username)}</strong>.</p></header>
+      <a class="btn" href="#/account">See my progress</a>`;
+    return;
+  }
+
+  root.innerHTML = `
+    <a class="back" href="#/">Back to games</a>
+    <header class="game-head">
+      <h1>${isLogin ? "Log in" : "Sign up"}</h1>
+      <p>${isLogin
+        ? "Welcome back. Log in to keep earning EXP."
+        : "Create an account to save your EXP and level up in every game mode."}</p>
+    </header>
+    <form class="auth-form" novalidate>
+      <label>Username
+        <input name="username" autocomplete="username" maxlength="50" required>
+      </label>
+      ${isLogin ? "" : `<p class="field-hint">3 to 50 characters: letters, numbers and underscores.</p>`}
+      <label>Password
+        <input name="password" type="password" autocomplete="${isLogin ? "current-password" : "new-password"}" maxlength="128" required>
+      </label>
+      ${isLogin ? "" : `<p class="field-hint">At least 8 characters.</p>
+      <label>Confirm password
+        <input name="confirm" type="password" autocomplete="new-password" maxlength="128" required>
+      </label>`}
+      <p class="form-error" role="alert" hidden></p>
+      <button type="submit" class="btn">${isLogin ? "Log in" : "Create account"}</button>
+      <p class="auth-switch">${isLogin
+        ? `No account yet? <a href="#/register">Sign up</a>`
+        : `Already have an account? <a href="#/login">Log in</a>`}</p>
+    </form>`;
+
+  const form = root.querySelector("form");
+  const errorEl = form.querySelector(".form-error");
+  const submit = form.querySelector("button[type=submit]");
+  const label = submit.textContent;
+  const showError = (text) => { errorEl.textContent = text; errorEl.hidden = false; };
+  form.elements.username.focus();
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errorEl.hidden = true;
+    const username = form.elements.username.value.trim();
+    const password = form.elements.password.value;
+    const problem = isLogin
+      ? (!username || !password ? "Enter your username and password." : "")
+      : signUpProblem(username, password, form.elements.confirm.value);
+    if (problem) { showError(problem); return; }
+
+    submit.disabled = true;
+    submit.textContent = isLogin ? "Logging in…" : "Creating account…";
+    const res = isLogin ? await logIn(username, password) : await signUp(username, password);
+    if (res.ok) {
+      const name = getSession() ? getSession().username : username;
+      showToast(isLogin ? `Welcome back, ${name}!` : `Account created. Welcome, ${name}!`);
+      location.hash = "#/";
+      return;
+    }
+    submit.disabled = false;
+    submit.textContent = label;
+    showError(res.status === 409
+      ? "That username is already taken. Try another one."
+      : errorMessage(res.data, "Something went wrong. Please try again."));
+  });
+}
+
+async function startAccount(root) {
+  const session = getSession();
+  if (!session) {
+    root.innerHTML = `<a class="back" href="#/">Back to games</a>
+      <header class="game-head"><h1>My progress</h1>
+        <p>Log in to see your EXP and levels for every game mode.</p></header>
+      <div class="auth-actions"><a class="btn" href="#/login">Log in</a> <a class="btn-quiet" href="#/register">Sign up</a></div>`;
+    return;
+  }
+
+  root.innerHTML = `
+    <a class="back" href="#/">Back to games</a>
+    <header class="game-head">
+      <h1>My progress</h1>
+      <p>Signed in as <strong>${escapeHtml(session.username)}</strong>. Finished games earn 10 EXP per correct answer,
+        up to 100 per game, and every ${EXP_PER_LEVEL} EXP is a new level.</p>
+    </header>
+    <div id="progress-list"><p class="loading" role="status">Loading your progress…</p></div>
+    <section class="danger-zone" aria-labelledby="delete-heading">
+      <h2 id="delete-heading">Delete account</h2>
+      <p>This permanently deletes your account and all of your EXP. It can't be undone.</p>
+      <form class="auth-form" novalidate>
+        <label>Type your username to confirm
+          <input name="confirmName" autocomplete="off" spellcheck="false">
+        </label>
+        <p class="form-error" role="alert" hidden></p>
+        <button type="submit" class="btn btn-danger">Delete my account</button>
+      </form>
+    </section>`;
+
+  const form = root.querySelector(".danger-zone form");
+  const errorEl = form.querySelector(".form-error");
+  const submit = form.querySelector("button[type=submit]");
+  const showError = (text) => { errorEl.textContent = text; errorEl.hidden = false; };
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errorEl.hidden = true;
+    const current = getSession();
+    if (!current) { route(); return; }
+    if (form.elements.confirmName.value.trim().toLowerCase() !== current.username.toLowerCase()) {
+      showError("That doesn't match your username.");
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = "Deleting…";
+    const res = await api("/api/v1/users/me", { method: "DELETE", auth: true });
+    if (res.ok) {
+      clearSession();
+      showToast("Your account has been deleted.");
+      location.hash = "#/";
+      return;
+    }
+    submit.disabled = false;
+    submit.textContent = "Delete my account";
+    showError(errorMessage(res.data, "Couldn't delete your account. Please try again."));
+  });
+
+  await refreshProgress();
+  if (location.hash !== "#/account") return;   // the player left while it loaded
+  if (!getSession()) { route(); return; }      // the session ended while it loaded
+
+  root.querySelector("#progress-list").innerHTML = CATEGORIES.map((cat) => `
+    <section class="progress-cat" data-cat="${cat.id}">
+      <h2>${cat.name}</h2>
+      <ul class="progress-rows">${cat.modes.map((m) => {
+        const exp = progressBySlug[m.href.slice(2)] || 0;
+        return `<li>
+          <a class="progress-name" href="${m.href}">${m.name}</a>
+          <span class="progress-level">Lv ${levelFor(exp)}</span>
+          ${expBarHtml(exp % EXP_PER_LEVEL)}
+          <span class="progress-exp">${exp} EXP</span>
+        </li>`;
+      }).join("")}</ul>
+    </section>`).join("");
+}
+
+/* =====================================================
    START
    ===================================================== */
+renderAccountBar();
 renderCategories();
 checkApi();
+refreshProgress();
 window.addEventListener("hashchange", route);
+route();   // open the right screen when the page loads on a #/ address
 route();
