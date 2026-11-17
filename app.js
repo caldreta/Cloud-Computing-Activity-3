@@ -120,6 +120,7 @@ async function logIn(username, password) {
   });
   const me = await api("/api/v1/users/me", { auth: true });
   if (me.ok) saveSession({ ...getSession(), username: me.data.username });
+  await refreshRole();
   await refreshProgress();
   renderAccountBar();
   return res;
@@ -263,7 +264,8 @@ function renderAccountBar() {
     el.innerHTML = `<a class="account-link" href="#/login">Log in</a>
       <a class="btn btn-small" href="#/register">Sign up</a>`;
   } else {
-    el.innerHTML = `<a class="player" href="#/account" title="See your progress">
+    el.innerHTML = `${isAdmin() ? `<a class="account-link admin-link" href="#/admin">Admin</a>` : ""}
+      <a class="player" href="#/account" title="See your progress">
         <span class="crest" aria-hidden="true"><span>${overallLevel()}</span></span>
         <span class="player-text"><span class="player-name">${escapeHtml(session.username)}</span>
           <span class="player-sub">Level ${overallLevel()}, ${totalExp()} EXP</span></span>
@@ -271,7 +273,7 @@ function renderAccountBar() {
       <button type="button" class="account-link" data-action="logout">Log out</button>`;
     el.querySelector("[data-action=logout]").addEventListener("click", () => {
       logOut();
-      if (location.hash === "#/account") location.hash = "#/";
+      if (location.hash === "#/account" || location.hash === "#/admin") location.hash = "#/";
     });
   }
   renderHeroNote();
@@ -431,7 +433,7 @@ async function checkApi() {
   }
 }
 
-const CATEGORY_NAMES = { loldle: "Loldle", quick: "Quick decisions", matching: "Matching", account: "Account" };
+const CATEGORY_NAMES = { loldle: "Loldle", quick: "Quick decisions", matching: "Matching", account: "Account", admin: "Admin" };
 
 // "All games / Loldle" trail at the top of every game and account page.
 function crumbHtml() {
@@ -450,6 +452,7 @@ const PAGES = {
   login: (root) => startAuth(root, "login"),
   register: (root) => startAuth(root, "register"),
   account: startAccount,
+  admin: startAdmin,
 };
 
 function route() {
@@ -457,7 +460,7 @@ function route() {
   const start = GAMES[key] || PAGES[key];
   gameScreen.innerHTML = "";
   if (start) {
-    gameScreen.dataset.cat = GAMES[key] ? key.split("/")[0] : "account";
+    gameScreen.dataset.cat = GAMES[key] ? key.split("/")[0] : (key === "admin" ? "admin" : "account");
     hubScreen.hidden = true;
     gameScreen.hidden = false;
     window.scrollTo(0, 0);
@@ -472,7 +475,7 @@ function route() {
 
 function pageTitle(key) {
   const mode = CATEGORIES.flatMap((c) => c.modes).find((m) => m.href === `#/${key}`);
-  return mode ? mode.name : { login: "Log in", register: "Sign up", account: "My progress" }[key] || "Champion Games";
+  return mode ? mode.name : { login: "Log in", register: "Sign up", account: "My progress", admin: "Admin" }[key] || "Champion Games";
 }
 
 /* =====================================================
@@ -1630,6 +1633,342 @@ async function startAccount(root) {
 }
 
 /* =====================================================
+   SECTION 11: ADMIN PANEL
+   #/admin: create accounts, reset passwords, change roles, deactivate and delete.
+   Hiding the Admin link from players is only a convenience. The real protection
+   is the API, which answers 403 to every admin request from a non-admin.
+   ===================================================== */
+
+function isAdmin() {
+  const session = getSession();
+  return Boolean(session && session.role === "admin");
+}
+
+// Asks the API for the logged-in account's role and keeps it with the session.
+// An API without the admin update answers 404, which counts as "not an admin".
+async function refreshRole() {
+  if (!getSession()) return;
+  const res = await api("/api/v1/users/me/role", { auth: true });
+  if (!res.ok && res.status !== 404) return;   // offline or server error: keep what we had
+  const session = getSession();
+  if (!session) return;
+  const role = res.ok ? res.data.role : "user";
+  if (session.role !== role) {
+    saveSession({ ...session, role });
+    renderAccountBar();
+  }
+}
+
+const ROLE_NAMES = { user: "Player", admin: "Admin" };
+
+function modeName(slug) {
+  const mode = CATEGORIES.flatMap((c) => c.modes).find((m) => m.href === `#/${slug}`);
+  return mode ? mode.name : slug;
+}
+
+function adminDeniedHtml(text) {
+  return `${crumbHtml()}
+    <header class="game-head"><h1>Admin</h1><p>${text}</p></header>
+    <a class="btn" href="#/">Back to all games</a>`;
+}
+
+async function startAdmin(root) {
+  if (!getSession()) {
+    root.innerHTML = `${crumbHtml()}
+      <header class="game-head"><h1>Admin</h1><p>Log in with an admin account to manage players.</p></header>
+      <div class="auth-actions"><a class="btn" href="#/login">Log in</a></div>`;
+    return;
+  }
+  root.innerHTML = `${crumbHtml()}
+    <header class="game-head"><h1>Admin</h1><p class="loading" role="status">Checking your access…</p></header>`;
+  await refreshRole();
+  if (location.hash !== "#/admin") return;   // left while checking
+  if (!getSession()) { route(); return; }
+  if (!isAdmin()) {
+    root.innerHTML = adminDeniedHtml("This page is for admin accounts only.");
+    return;
+  }
+
+  const me = getSession().username.toLowerCase();
+  let users = [];
+  let open = null;        // { id, kind: "progress" | "password" | "delete" }
+  let requestId = 0;      // ignores slow search results that arrive after newer ones
+
+  root.innerHTML = `
+    ${crumbHtml()}
+    <header class="game-head">
+      <h1>Admin</h1>
+      <p>Create accounts, reset passwords and manage who can play. Changes apply straight away.</p>
+    </header>
+
+    <section class="admin-create" aria-labelledby="create-heading">
+      <h2 id="create-heading">Create an account</h2>
+      <form class="admin-create-form" novalidate>
+        <label>Username
+          <input name="username" autocomplete="off" spellcheck="false" maxlength="50">
+        </label>
+        <label>Password
+          <input name="password" type="password" autocomplete="new-password" maxlength="128">
+        </label>
+        <label>Role
+          <select name="role"><option value="user">Player</option><option value="admin">Admin</option></select>
+        </label>
+        <button type="submit" class="btn">Create account</button>
+      </form>
+      <p class="field-hint">Usernames use 3 to 50 letters, numbers and underscores. Passwords need at least 8 characters.</p>
+      <p class="form-error" role="alert" hidden></p>
+    </section>
+
+    <section class="admin-users" aria-labelledby="users-heading">
+      <div class="admin-toolbar">
+        <h2 id="users-heading">Accounts</h2>
+        <span class="admin-count" role="status"></span>
+        <label class="admin-search"><span class="sr-only">Search usernames</span>
+          <input type="search" placeholder="Search usernames" maxlength="50" spellcheck="false">
+        </label>
+      </div>
+      <div class="admin-list"><p class="loading" role="status">Loading accounts…</p></div>
+    </section>`;
+
+  const createForm = root.querySelector(".admin-create-form");
+  const createError = root.querySelector(".admin-create .form-error");
+  const createButton = createForm.querySelector("button");
+  const searchInput = root.querySelector(".admin-search input");
+  const countEl = root.querySelector(".admin-count");
+  const listEl = root.querySelector(".admin-list");
+
+  const stillHere = () => location.hash === "#/admin" && root.isConnected;
+
+  // Shared handling for failed admin requests. Returns true if the page was replaced.
+  function handleAccessLoss(res) {
+    if (res.status === 401) { route(); return true; }   // session ended: api() already logged out
+    if (res.status === 403) {
+      saveSession({ ...getSession(), role: "user" });
+      renderAccountBar();
+      root.innerHTML = adminDeniedHtml("Your account no longer has admin access.");
+      return true;
+    }
+    return false;
+  }
+
+  async function load() {
+    const id = ++requestId;
+    const q = searchInput.value.trim();
+    const res = await api(`/api/v1/admin/users${q ? `?search=${encodeURIComponent(q)}` : ""}`, { auth: true });
+    if (id !== requestId || !stillHere()) return;
+    if (!res.ok) {
+      if (handleAccessLoss(res)) return;
+      listEl.innerHTML = `<p class="error">${escapeHtml(errorMessage(res.data, "Couldn't load the accounts."))}</p>`;
+      return;
+    }
+    users = res.data.users;
+    if (open && !users.some((u) => u.id === open.id)) open = null;
+    renderList();
+  }
+
+  function actionsHtml(user, isSelf) {
+    const pressed = (kind) => (open && open.id === user.id && open.kind === kind ? "true" : "false");
+    const name = escapeHtml(user.username);
+    const buttons = [
+      `<button type="button" class="admin-btn" data-action="progress" aria-expanded="${pressed("progress")}" aria-label="Progress for ${name}">Progress</button>`,
+      `<button type="button" class="admin-btn" data-action="password" aria-expanded="${pressed("password")}" aria-label="Reset password for ${name}">Reset password</button>`,
+    ];
+    if (isSelf) return buttons.join("");
+    buttons.push(
+      `<button type="button" class="admin-btn" data-action="role">${user.role === "admin" ? "Make player" : "Make admin"}</button>`,
+      `<button type="button" class="admin-btn" data-action="active">${user.is_active ? "Deactivate" : "Activate"}</button>`,
+      `<button type="button" class="admin-btn admin-btn-danger" data-action="delete" aria-expanded="${pressed("delete")}" aria-label="Delete ${name}">Delete</button>`,
+    );
+    return buttons.join("");
+  }
+
+  function panelHtml(user) {
+    const name = escapeHtml(user.username);
+    if (open.kind === "progress") {
+      return `<p class="loading" role="status">Loading ${name}'s progress…</p>`;
+    }
+    if (open.kind === "password") {
+      return `<form class="admin-inline-form" data-form="password" novalidate>
+          <label>New password for ${name}
+            <input name="newPassword" type="password" autocomplete="new-password" maxlength="128">
+          </label>
+          <button type="submit" class="btn btn-small">Save password</button>
+          <button type="button" class="btn-quiet btn-small" data-action="close">Cancel</button>
+          <p class="form-error" role="alert" hidden></p>
+        </form>`;
+    }
+    return `<div class="admin-inline-form admin-confirm">
+        <p>Delete <strong>${name}</strong> and all of their EXP? This can't be undone.</p>
+        <button type="button" class="btn btn-danger btn-small" data-action="confirm-delete">Delete ${name}</button>
+        <button type="button" class="btn-quiet btn-small" data-action="close">Cancel</button>
+        <p class="form-error" role="alert" hidden></p>
+      </div>`;
+  }
+
+  function renderList() {
+    countEl.textContent = `${users.length} ${users.length === 1 ? "account" : "accounts"}`;
+    if (!users.length) {
+      listEl.innerHTML = `<p class="empty">${searchInput.value.trim()
+        ? "No usernames match that search."
+        : "No accounts yet. Create one above."}</p>`;
+      return;
+    }
+    listEl.innerHTML = `<table class="admin-table">
+      <thead><tr>
+        <th scope="col">Username</th><th scope="col">Role</th><th scope="col">Status</th>
+        <th scope="col">Level</th><th scope="col"><span class="sr-only">Actions</span></th>
+      </tr></thead>
+      <tbody>${users.map((user) => {
+        const isSelf = user.username.toLowerCase() === me;
+        const row = `<tr data-id="${user.id}"${user.is_active ? "" : ` class="is-inactive"`}>
+          <th scope="row"><span class="admin-name">${escapeHtml(user.username)}</span>${isSelf ? ` <span class="you-tag">You</span>` : ""}</th>
+          <td data-label="Role"><span class="role-badge" data-role="${user.role}">${ROLE_NAMES[user.role] || user.role}</span></td>
+          <td data-label="Status"><span class="status" data-active="${user.is_active}">${user.is_active ? "Active" : "Deactivated"}</span></td>
+          <td data-label="Level"><span class="num">Level ${user.level}</span> <span class="admin-exp num">${user.total_exp} EXP</span></td>
+          <td class="admin-actions">${actionsHtml(user, isSelf)}</td>
+        </tr>`;
+        const panel = open && open.id === user.id
+          ? `<tr class="admin-panel-row" data-panel-for="${user.id}"><td colspan="5">${panelHtml(user)}</td></tr>`
+          : "";
+        return row + panel;
+      }).join("")}</tbody>
+    </table>`;
+
+    if (!open) return;
+    const panel = listEl.querySelector(`[data-panel-for="${open.id}"]`);
+    if (open.kind === "progress") loadProgress(open.id, panel);
+    if (open.kind === "password") panel.querySelector("input").focus();
+    if (open.kind === "delete") panel.querySelector("[data-action=confirm-delete]").focus();
+  }
+
+  async function loadProgress(id, panel) {
+    const res = await api(`/api/v1/admin/users/${id}`, { auth: true });
+    if (!stillHere() || !panel.isConnected) return;
+    const cell = panel.querySelector("td");
+    if (!res.ok) {
+      if (handleAccessLoss(res)) return;
+      cell.innerHTML = `<p class="error">${escapeHtml(errorMessage(res.data, "Couldn't load this player's progress."))}</p>`;
+      return;
+    }
+    cell.innerHTML = `<ul class="admin-progress">${res.data.progress.map((p) => `
+        <li><span class="admin-mode">${escapeHtml(modeName(p.slug))}</span>
+          <span class="num">Level ${p.level}</span>
+          ${expBarHtml(p.exp % EXP_PER_LEVEL)}
+          <span class="admin-exp num">${p.exp} EXP</span></li>`).join("")}</ul>`;
+  }
+
+  function toggle(id, kind) {
+    open = open && open.id === id && open.kind === kind ? null : { id, kind };
+    renderList();
+    if (!open) listEl.querySelector(`tr[data-id="${id}"] [data-action="${kind}"]`)?.focus();
+  }
+
+  // Runs one admin request, then reloads the list. Returns true on success.
+  async function run(request, success, errorEl) {
+    const res = await api(request.path, { method: request.method, body: request.body, auth: true });
+    if (!stillHere()) return false;
+    if (!res.ok) {
+      if (handleAccessLoss(res)) return false;
+      const text = errorMessage(res.data, "That didn't work. Please try again.");
+      if (errorEl) { errorEl.textContent = text; errorEl.hidden = false; } else showToast(text);
+      return false;
+    }
+    showToast(success);
+    return true;
+  }
+
+  listEl.addEventListener("click", async (e) => {
+    const button = e.target.closest("button[data-action]");
+    if (!button) return;
+    const id = Number(button.closest("tr").dataset.id || button.closest("tr").dataset.panelFor);
+    const user = users.find((u) => u.id === id);
+    if (!user) return;
+    const action = button.dataset.action;
+
+    if (action === "progress" || action === "password" || action === "delete") { toggle(id, action); return; }
+    if (action === "close") { toggle(id, open.kind); return; }
+
+    button.disabled = true;
+    let ok = false;
+    if (action === "role") {
+      const role = user.role === "admin" ? "user" : "admin";
+      ok = await run({ path: `/api/v1/admin/users/${id}`, method: "PATCH", body: { role } },
+        role === "admin" ? `${user.username} is now an admin.` : `${user.username} is now a player.`);
+    } else if (action === "active") {
+      const isActive = !user.is_active;
+      ok = await run({ path: `/api/v1/admin/users/${id}`, method: "PATCH", body: { is_active: isActive } },
+        isActive ? `Activated ${user.username}.` : `Deactivated ${user.username}. They can't log in until you activate them.`);
+    } else if (action === "confirm-delete") {
+      const errorEl = button.parentElement.querySelector(".form-error");
+      ok = await run({ path: `/api/v1/admin/users/${id}`, method: "DELETE" }, `Deleted ${user.username}.`, errorEl);
+      if (ok) open = null;
+    }
+    if (!stillHere()) return;
+    button.disabled = false;
+    if (ok) await load();
+  });
+
+  listEl.addEventListener("submit", async (e) => {
+    const form = e.target.closest("[data-form=password]");
+    if (!form) return;
+    e.preventDefault();
+    const id = Number(form.closest("tr").dataset.panelFor);
+    const user = users.find((u) => u.id === id);
+    const errorEl = form.querySelector(".form-error");
+    const password = form.elements.newPassword.value;
+    errorEl.hidden = true;
+    if (password.length < 8 || password.length > 128) {
+      errorEl.textContent = "The new password must be 8 to 128 characters.";
+      errorEl.hidden = false;
+      return;
+    }
+    const submit = form.querySelector("button[type=submit]");
+    submit.disabled = true;
+    submit.textContent = "Saving…";
+    const ok = await run(
+      { path: `/api/v1/admin/users/${id}/password`, method: "PATCH", body: { new_password: password } },
+      `Saved a new password for ${user.username}.`, errorEl);
+    if (!stillHere()) return;
+    if (ok) { open = null; renderList(); return; }
+    submit.disabled = false;
+    submit.textContent = "Save password";
+  });
+
+  createForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    createError.hidden = true;
+    const username = createForm.elements.username.value.trim();
+    const password = createForm.elements.password.value;
+    const role = createForm.elements.role.value;
+    const problem = signUpProblem(username, password, password);
+    if (problem) {
+      createError.textContent = problem.replace("Your username", "The username").replace("Your password", "The password");
+      createError.hidden = false;
+      return;
+    }
+    createButton.disabled = true;
+    createButton.textContent = "Creating…";
+    const ok = await run({ path: "/api/v1/admin/users", method: "POST", body: { username, password, role } },
+      `Created ${username} as ${role === "admin" ? "an admin" : "a player"}.`, createError);
+    if (!stillHere()) return;
+    createButton.disabled = false;
+    createButton.textContent = "Create account";
+    if (ok) {
+      createForm.reset();
+      await load();
+    }
+  });
+
+  let searchTimer;
+  searchInput.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(load, 250);
+  });
+
+  await load();
+}
+
+/* =====================================================
    START
    ===================================================== */
 document.getElementById("random-game").addEventListener("click", playRandomGame);
@@ -1637,6 +1976,6 @@ renderAccountBar();
 renderCategories();
 checkApi();
 refreshProgress();
+refreshRole();   // the role can change while the player is away, so check it on every visit
 window.addEventListener("hashchange", route);
 route();   // open the right screen when the page loads on a #/ address
-route();
