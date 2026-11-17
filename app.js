@@ -54,6 +54,7 @@ function saveSession(session) {
 function clearSession() {
   try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
   progressBySlug = {};
+  favoriteChamp = null;
   renderAccountBar();
   renderCategories();
 }
@@ -122,6 +123,7 @@ async function logIn(username, password) {
   if (me.ok) saveSession({ ...getSession(), username: me.data.username });
   await refreshRole();
   await refreshProgress();
+  await refreshFavorite();
   renderAccountBar();
   return res;
 }
@@ -200,6 +202,32 @@ async function awardExp(slug, correct, total, onUpdate) {
     </span>`);
   animateRewards();
   if (leveledUp) showToast(`Level up! You reached level ${level}.`);
+}
+
+/* ---------- Favorite counter ----------
+   Every champion a player answers correctly is sent to the API, which counts them in the
+   user_character_stats table (users <-> characters). The most-counted one is the favorite counter. */
+let favoriteChamp = null;   // { id, name, title, image, times_correct } or null
+
+// Sends the champions answered correctly in one finished game. Guests are skipped.
+async function recordHits(characterIds) {
+  const ids = [...new Set(characterIds)].filter(Boolean).slice(0, 20);
+  if (!getSession() || !ids.length) return;
+  const before = favoriteChamp && favoriteChamp.id;
+  const res = await api("/api/v1/users/me/characters", { method: "POST", body: { character_ids: ids }, auth: true });
+  if (!res.ok) return;   // never interrupt a game over this
+  favoriteChamp = res.data.favorite;
+  renderHeroNote();
+  if (favoriteChamp && before && favoriteChamp.id !== before) {
+    showToast(`New favorite counter: ${favoriteChamp.name}!`);
+  }
+}
+
+async function refreshFavorite() {
+  if (!getSession()) { favoriteChamp = null; return; }
+  const res = await api("/api/v1/users/me/characters?limit=1", { auth: true });
+  favoriteChamp = res.ok ? res.data.favorite : null;
+  renderHeroNote();
 }
 
 const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -284,6 +312,13 @@ function renderHeroNote() {
   const el = document.getElementById("hero-note");
   if (!el) return;
   const session = getSession();
+  if (session && favoriteChamp) {
+    el.innerHTML = `Welcome back, ${escapeHtml(session.username)}. You're level ${overallLevel()} overall.
+      <a class="hero-favorite" href="#/champions" title="See your top champions">
+        ${portraitHtml(favoriteChamp, "sm")}<span>Favorite counter: <strong>${escapeHtml(favoriteChamp.name)}</strong></span></a>`;
+    if (!el.dataset.watched) { watchBrokenImages(el); el.dataset.watched = "1"; }
+    return;
+  }
   el.innerHTML = session
     ? `Welcome back, ${escapeHtml(session.username)}. You're level ${overallLevel()} overall.`
     : `<a href="#/register">Create an account</a> to save your EXP.`;
@@ -433,7 +468,7 @@ async function checkApi() {
   }
 }
 
-const CATEGORY_NAMES = { loldle: "Loldle", quick: "Quick decisions", matching: "Matching", account: "Account", admin: "Admin" };
+const CATEGORY_NAMES = { loldle: "Loldle", quick: "Quick decisions", matching: "Matching", account: "Account", admin: "Admin", champions: "Account" };
 
 // "All games / Loldle" trail at the top of every game and account page.
 function crumbHtml() {
@@ -453,6 +488,7 @@ const PAGES = {
   register: (root) => startAuth(root, "register"),
   account: startAccount,
   admin: startAdmin,
+  champions: startChampions,
 };
 
 function route() {
@@ -475,7 +511,7 @@ function route() {
 
 function pageTitle(key) {
   const mode = CATEGORIES.flatMap((c) => c.modes).find((m) => m.href === `#/${key}`);
-  return mode ? mode.name : { login: "Log in", register: "Sign up", account: "My progress", admin: "Admin" }[key] || "Champion Games";
+  return mode ? mode.name : { login: "Log in", register: "Sign up", account: "My progress", admin: "Admin", champions: "My champions" }[key] || "Champion Games";
 }
 
 /* =====================================================
@@ -727,6 +763,7 @@ async function startClassic(root) {
       const round = secret;
       const { correct, total } = guessScore(guesses.length);
       awardExp("loldle/classic", correct, total, (html) => { if (secret === round) setReward(result, html); });
+      recordHits([round.id]);
     }
   }
 
@@ -874,6 +911,7 @@ async function startLore(root) {
       const round = secret;
       const { correct, total } = guessScore(guessCount);
       awardExp("loldle/lore", correct, total, (html) => { if (secret === round) setReward(result, html); });
+      recordHits([round.id]);
     }
   }
 
@@ -989,6 +1027,7 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
   let score = 0;
   let answered = null;       // index of the chosen option, or null
   let results = [];          // true / false per answered question, for the progress track
+  let hits = [];             // ids of champions answered correctly, for the favorite counter
 
   function newRun() {
     const used = new Set();
@@ -996,6 +1035,7 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
     index = 0;
     score = 0;
     results = [];
+    hits = [];
     renderRound();
   }
 
@@ -1046,7 +1086,14 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
     answered = i;
     const round = rounds[index];
     const right = round.options[i].correct;
-    if (right) score++;
+    if (right) {
+      score++;
+      // True or False names its champion in meta; the other quizzes credit the right option's champion
+      const champId = round.meta && round.meta.champId
+        ? round.meta.champId
+        : (round.options.find((o) => o.correct && o.champ) || {}).champ?.id;
+      if (champId) hits.push(champId);
+    }
     results.push(right);
 
     quiz.querySelectorAll(".quiz-option").forEach((btn, k) => {
@@ -1082,6 +1129,7 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
     again.focus();
     const run = rounds;
     awardExp(hash.slice(2), score, ROUNDS_PER_GAME, (html) => { if (rounds === run) setReward(quiz, html); });
+    recordHits(hits);
   }
 
   newRun();
@@ -1260,6 +1308,7 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
   let reward = "";          // EXP message for the finished board, kept across re-renders
   let animateIn = true;     // cards slide in on a fresh board only, not on every click
   let lastPlaced = null;    // id of the card just placed, so only it pops
+  let missed = new Set();   // cards that had a wrong try; they don't count towards the favorite counter
 
   function newRun() {
     board = makeBoard(roster);
@@ -1272,6 +1321,7 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
     reward = "";
     animateIn = true;
     lastPlaced = null;
+    missed = new Set();
     render();
   }
 
@@ -1351,9 +1401,11 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
           reward = html;
           setReward(mount, html);
         });
+        recordHits(board.items.filter((i) => i.champ && !missed.has(i.id)).map((i) => i.champ.id));
       } else focusItem(null);
     } else {
       mistakes++;
+      missed.add(item.id);
       message = "Not there. Try another place.";
       render();
       focusItem(selected);
@@ -1572,6 +1624,7 @@ async function startAccount(root) {
       <p>Signed in as <strong>${escapeHtml(session.username)}</strong>. Finished games earn 10 EXP per correct answer,
         up to 100 per game, and every ${EXP_PER_LEVEL} EXP is a new level.</p>
     </header>
+    <a class="btn-quiet account-champions-link" href="#/champions">See my top champions</a>
     <div id="progress-list"><p class="loading" role="status">Loading your progress…</p></div>
     <section class="danger-zone" aria-labelledby="delete-heading">
       <h2 id="delete-heading">Delete account</h2>
@@ -1630,6 +1683,71 @@ async function startAccount(root) {
         </li>`;
       }).join("")}</ul>
     </section>`).join("");
+}
+
+/* =====================================================
+   SECTION 10B: MY CHAMPIONS (#/champions)
+   The champions this player got right most often. #1 is their favorite counter.
+   ===================================================== */
+function timesText(n) {
+  return `${n} ${n === 1 ? "time" : "times"}`;
+}
+
+async function startChampions(root) {
+  if (!getSession()) {
+    root.innerHTML = `${crumbHtml()}
+      <header class="game-head"><h1>My champions</h1>
+        <p>Log in to see the champions you get right most often.</p></header>
+      <div class="auth-actions"><a class="btn" href="#/login">Log in</a> <a class="btn-quiet" href="#/register">Sign up</a></div>`;
+    return;
+  }
+  root.innerHTML = `${crumbHtml()}
+    <header class="game-head"><h1>My champions</h1>
+      <p>Every champion you answer correctly is counted. The one you get right most often is your favorite counter.</p></header>
+    <div id="champions-body"><p class="loading" role="status">Loading your champions…</p></div>`;
+
+  const res = await api("/api/v1/users/me/characters?limit=10", { auth: true });
+  if (location.hash !== "#/champions") return;
+  if (!getSession()) { route(); return; }
+  const body = root.querySelector("#champions-body");
+  if (!res.ok) {
+    body.innerHTML = `<p class="error">${escapeHtml(errorMessage(res.data, "Couldn't load your champions."))}</p>`;
+    return;
+  }
+
+  const list = res.data.characters;
+  favoriteChamp = res.data.favorite;
+  renderHeroNote();
+  if (!list.length) {
+    body.innerHTML = `<div class="empty-champions">
+        <p>No champions counted yet. Win a Loldle round or answer a quiz question correctly and they'll show up here.</p>
+        <button type="button" class="btn" id="champions-play">Play a random game</button>
+      </div>`;
+    body.querySelector("#champions-play").addEventListener("click", playRandomGame);
+    return;
+  }
+
+  const [fav, ...rest] = list;
+  body.innerHTML = `
+    <section class="favorite-card" aria-labelledby="favorite-heading">
+      ${portraitHtml(fav, "xl")}
+      <div class="favorite-text">
+        <p class="favorite-label" id="favorite-heading">Your favorite counter</p>
+        <h2 class="favorite-name">${escapeHtml(fav.name)}</h2>
+        <p class="favorite-title">${escapeHtml(fav.title || "")}</p>
+        <p class="favorite-count">Guessed right <span class="num">${timesText(fav.times_correct)}</span></p>
+      </div>
+    </section>
+    ${rest.length ? `<h2 class="champions-heading">Your next best</h2>
+    <ol class="champion-ranks" start="2">${rest.map((c, i) => `
+      <li>
+        <span class="rank num" aria-hidden="true">${i + 2}</span>
+        ${portraitHtml(c, "md")}
+        <span class="rank-text"><span class="rank-name">${escapeHtml(c.name)}</span>
+          <span class="rank-title">${escapeHtml(c.title || "")}</span></span>
+        <span class="rank-count num">${timesText(c.times_correct)}</span>
+      </li>`).join("")}</ol>` : ""}`;
+  watchBrokenImages(body);
 }
 
 /* =====================================================
@@ -1825,7 +1943,7 @@ async function startAdmin(root) {
           <td data-label="Role"><span class="role-badge" data-role="${user.role}">${ROLE_NAMES[user.role] || user.role}</span></td>
           <td data-label="Status"><span class="status" data-active="${user.is_active}">${user.is_active ? "Active" : "Deactivated"}</span></td>
           <td data-label="Level"><span class="num">Level ${user.level}</span> <span class="admin-exp num">${user.total_exp} EXP</span></td>
-          <td class="admin-actions">${actionsHtml(user, isSelf)}</td>
+          <td class="admin-actions"><div class="admin-actions-inner">${actionsHtml(user, isSelf)}</div></td>
         </tr>`;
         const panel = open && open.id === user.id
           ? `<tr class="admin-panel-row" data-panel-for="${user.id}"><td colspan="5">${panelHtml(user)}</td></tr>`
@@ -1853,8 +1971,8 @@ async function startAdmin(root) {
     cell.innerHTML = `<ul class="admin-progress">${res.data.progress.map((p) => `
         <li><span class="admin-mode">${escapeHtml(modeName(p.slug))}</span>
           <span class="num">Level ${p.level}</span>
-          ${expBarHtml(p.exp % EXP_PER_LEVEL)}
-          <span class="admin-exp num">${p.exp} EXP</span></li>`).join("")}</ul>`;
+          <span class="admin-exp num">${p.exp} EXP</span>
+          ${expBarHtml(p.exp % EXP_PER_LEVEL)}</li>`).join("")}</ul>`;
   }
 
   function toggle(id, kind) {
@@ -1976,6 +2094,7 @@ renderAccountBar();
 renderCategories();
 checkApi();
 refreshProgress();
+refreshFavorite();
 refreshRole();   // the role can change while the player is away, so check it on every visit
 window.addEventListener("hashchange", route);
 route();   // open the right screen when the page loads on a #/ address
