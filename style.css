@@ -456,10 +456,29 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
   padding: .65rem 1rem; background: linear-gradient(180deg, var(--surface-2), var(--surface));
   border: 1px solid var(--line); border-radius: var(--radius);
 }
-.lb-list li.is-me { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(200, 170, 110, .35); }
-.lb-list li[data-place="1"] .lb-place { color: #f0c75e; }
-.lb-list li[data-place="2"] .lb-place { color: #cfd8e3; }
-.lb-list li[data-place="3"] .lb-place { color: #c98a5a; }
+.lb-list li.is-me { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(200, 170, 110, .35); outline: 1px solid rgba(240, 230, 210, .4); outline-offset: 3px; }
+
+/* the podium: gold, silver and bronze rows. --medal is the colour, --medal-hi and --medal-lo shade the badge. */
+.lb-list li[data-place="1"] { --medal: #f5c542; --medal-hi: #fff0b3; --medal-lo: #b8821b; }
+.lb-list li[data-place="2"] { --medal: #c9d3df; --medal-hi: #f5f8fb; --medal-lo: #8794a6; }
+.lb-list li[data-place="3"] { --medal: #d98c55; --medal-hi: #f6c59d; --medal-lo: #9a5427; }
+.lb-list li[data-place="1"], .lb-list li[data-place="2"], .lb-list li[data-place="3"] {
+  padding-block: .85rem;
+  border-color: var(--medal);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--medal) 26%, transparent), color-mix(in srgb, var(--medal) 6%, transparent) 55%, transparent),
+    linear-gradient(180deg, var(--surface-2), var(--surface));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--medal) 45%, transparent), 0 0 24px color-mix(in srgb, var(--medal) 22%, transparent), var(--shadow-sm);
+}
+.lb-list li[data-place="1"] { padding-block: 1rem; box-shadow: 0 0 0 1px color-mix(in srgb, var(--medal) 60%, transparent), 0 0 34px color-mix(in srgb, var(--medal) 32%, transparent), var(--shadow-sm); }
+.lb-list li[data-place="1"] .lb-name, .lb-list li[data-place="2"] .lb-name, .lb-list li[data-place="3"] .lb-name { color: var(--medal); }
+.lb-list li[data-place="1"] .lb-name { font-size: 1.1rem; }
+.lb-list li[data-place="1"] .lb-place, .lb-list li[data-place="2"] .lb-place, .lb-list li[data-place="3"] .lb-place {
+  display: grid; place-items: center; width: 2.1rem; height: 2.4rem; color: #1a1306; font-size: 1rem;
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  background: linear-gradient(180deg, var(--medal-hi), var(--medal) 55%, var(--medal-lo));
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--medal) 55%, transparent));
+}
 .lb-list li.lb-gap { display: block; padding: 0; text-align: center; color: var(--muted); background: none; border: 0; }
 .lb-place { color: var(--muted); font: 700 1.05rem var(--font-body); font-variant-numeric: tabular-nums; }
 .lb-name { color: var(--gold-hi); font-weight: 700; overflow-wrap: anywhere; }
