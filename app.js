@@ -55,6 +55,7 @@ function saveSession(session) {
 function clearSession() {
   try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
   progressBySlug = {};
+  favoriteChamp = null;
   renderAccountBar();
   renderCategories();
 }
@@ -161,7 +162,9 @@ async function logIn(username, password) {
   });
   const me = await api("/api/v1/users/me", { auth: true });
   if (me.ok) saveSession({ ...getSession(), username: me.data.username });
+  await refreshRole();
   await refreshProgress();
+  await refreshFavorite();
   renderAccountBar();
   return res;
 }
@@ -242,6 +245,32 @@ async function awardExp(slug, correct, total, onUpdate) {
   if (leveledUp) showToast(`Level up! You reached level ${level}.`);
 }
 
+/* ---------- Favorite counter ----------
+   Every champion a player answers correctly is sent to the API, which counts them in the
+   user_character_stats table (users <-> characters). The most-counted one is the favorite counter. */
+let favoriteChamp = null;   // { id, name, title, image, times_correct } or null
+
+// Sends the champions answered correctly in one finished game. Guests are skipped.
+async function recordHits(characterIds) {
+  const ids = [...new Set(characterIds)].filter(Boolean).slice(0, 20);
+  if (!getSession() || !ids.length) return;
+  const before = favoriteChamp && favoriteChamp.id;
+  const res = await api("/api/v1/users/me/characters", { method: "POST", body: { character_ids: ids }, auth: true });
+  if (!res.ok) return;   // never interrupt a game over this
+  favoriteChamp = res.data.favorite;
+  renderHeroNote();
+  if (favoriteChamp && before && favoriteChamp.id !== before) {
+    showToast(`New favorite counter: ${favoriteChamp.name}!`);
+  }
+}
+
+async function refreshFavorite() {
+  if (!getSession()) { favoriteChamp = null; return; }
+  const res = await api("/api/v1/users/me/characters?limit=1", { auth: true });
+  favoriteChamp = res.ok ? res.data.favorite : null;
+  renderHeroNote();
+}
+
 const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // Fills EXP bars from their start width to their target, and counts the gained EXP up.
@@ -307,7 +336,8 @@ function renderAccountBar() {
   } else {
     const level = overallLevel();
     const rank = rankFor(level);
-    el.innerHTML = `${board}<a class="player" href="#/account" title="See your progress">
+    el.innerHTML = `${board}${isAdmin() ? `<a class="account-link admin-link" href="#/admin">Admin</a>` : ""}
+      <a class="player" href="#/account" title="See your progress">
         ${crestHtml(level, totalExp() % EXP_PER_LEVEL)}
         <span class="player-text"><span class="player-name">${escapeHtml(session.username)}</span>
           <span class="player-sub">${rank ? rankTagHtml(rank.name) : `Level ${level}`}</span></span>
@@ -315,7 +345,7 @@ function renderAccountBar() {
       <button type="button" class="account-link" data-action="logout">Log out</button>`;
     el.querySelector("[data-action=logout]").addEventListener("click", () => {
       logOut();
-      if (location.hash === "#/account") location.hash = "#/";
+      if (location.hash === "#/account" || location.hash === "#/admin") location.hash = "#/";
     });
   }
   renderHeroNote();
@@ -326,6 +356,13 @@ function renderHeroNote() {
   const el = document.getElementById("hero-note");
   if (!el) return;
   const session = getSession();
+  if (session && favoriteChamp) {
+    el.innerHTML = `Welcome back, ${escapeHtml(session.username)}. You're level ${overallLevel()} overall.
+      <a class="hero-favorite" href="#/champions" title="See your top champions">
+        ${portraitHtml(favoriteChamp, "sm")}<span>Favorite counter: <strong>${escapeHtml(favoriteChamp.name)}</strong></span></a>`;
+    if (!el.dataset.watched) { watchBrokenImages(el); el.dataset.watched = "1"; }
+    return;
+  }
   el.innerHTML = session
     ? `Welcome back, ${escapeHtml(session.username)}. You're level ${overallLevel()}${rankFor(overallLevel()) ? `, ${escapeHtml(rankFor(overallLevel()).name)}` : ""}.`
     : `<a href="#/register">Create an account</a> to save your EXP.`;
@@ -475,7 +512,7 @@ async function checkApi() {
   }
 }
 
-const CATEGORY_NAMES = { loldle: "Loldle", quick: "Quick decisions", matching: "Matching", account: "Account", leaderboard: "Leaderboard" };
+const CATEGORY_NAMES = { loldle: "Loldle", quick: "Quick decisions", matching: "Matching", account: "Account", leaderboard: "Leaderboard", admin: "Admin", champions: "Account" };
 
 // "All games / Loldle" trail at the top of every game and account page.
 function crumbHtml() {
@@ -495,6 +532,8 @@ const PAGES = {
   register: (root) => startAuth(root, "register"),
   account: startAccount,
   leaderboard: startLeaderboard,
+  admin: startAdmin,
+  champions: startChampions,
 };
 
 function route() {
@@ -502,7 +541,7 @@ function route() {
   const start = GAMES[key] || PAGES[key];
   gameScreen.innerHTML = "";
   if (start) {
-    gameScreen.dataset.cat = GAMES[key] ? key.split("/")[0] : key === "leaderboard" ? "leaderboard" : "account";
+    gameScreen.dataset.cat = GAMES[key] ? key.split("/")[0] : (key === "admin" || key === "leaderboard" ? key : "account");
     hubScreen.hidden = true;
     gameScreen.hidden = false;
     window.scrollTo(0, 0);
@@ -517,7 +556,7 @@ function route() {
 
 function pageTitle(key) {
   const mode = CATEGORIES.flatMap((c) => c.modes).find((m) => m.href === `#/${key}`);
-  return mode ? mode.name : { login: "Log in", register: "Sign up", account: "My progress", leaderboard: "Leaderboard" }[key] || "Champion Games";
+  return mode ? mode.name : { login: "Log in", register: "Sign up", account: "My progress", leaderboard: "Leaderboard", admin: "Admin", champions: "My champions" }[key] || "Champion Games";
 }
 
 /* =====================================================
@@ -769,6 +808,7 @@ async function startClassic(root) {
       const round = secret;
       const { correct, total } = guessScore(guesses.length);
       awardExp("loldle/classic", correct, total, (html) => { if (secret === round) setReward(result, html); });
+      recordHits([round.id]);
     }
   }
 
@@ -916,6 +956,7 @@ async function startLore(root) {
       const round = secret;
       const { correct, total } = guessScore(guessCount);
       awardExp("loldle/lore", correct, total, (html) => { if (secret === round) setReward(result, html); });
+      recordHits([round.id]);
     }
   }
 
@@ -1031,6 +1072,7 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
   let score = 0;
   let answered = null;       // index of the chosen option, or null
   let results = [];          // true / false per answered question, for the progress track
+  let hits = [];             // ids of champions answered correctly, for the favorite counter
 
   function newRun() {
     const used = new Set();
@@ -1038,6 +1080,7 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
     index = 0;
     score = 0;
     results = [];
+    hits = [];
     renderRound();
   }
 
@@ -1088,7 +1131,14 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
     answered = i;
     const round = rounds[index];
     const right = round.options[i].correct;
-    if (right) score++;
+    if (right) {
+      score++;
+      // True or False names its champion in meta; the other quizzes credit the right option's champion
+      const champId = round.meta && round.meta.champId
+        ? round.meta.champId
+        : (round.options.find((o) => o.correct && o.champ) || {}).champ?.id;
+      if (champId) hits.push(champId);
+    }
     results.push(right);
 
     quiz.querySelectorAll(".quiz-option").forEach((btn, k) => {
@@ -1124,6 +1174,7 @@ async function startQuiz(root, { hash, title, intro, makeRound }) {
     again.focus();
     const run = rounds;
     awardExp(hash.slice(2), score, ROUNDS_PER_GAME, (html) => { if (rounds === run) setReward(quiz, html); });
+    recordHits(hits);
   }
 
   newRun();
@@ -1302,6 +1353,7 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
   let reward = "";          // EXP message for the finished board, kept across re-renders
   let animateIn = true;     // cards slide in on a fresh board only, not on every click
   let lastPlaced = null;    // id of the card just placed, so only it pops
+  let missed = new Set();   // cards that had a wrong try; they don't count towards the favorite counter
 
   function newRun() {
     board = makeBoard(roster);
@@ -1314,6 +1366,7 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
     reward = "";
     animateIn = true;
     lastPlaced = null;
+    missed = new Set();
     render();
   }
 
@@ -1393,9 +1446,11 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
           reward = html;
           setReward(mount, html);
         });
+        recordHits(board.items.filter((i) => i.champ && !missed.has(i.id)).map((i) => i.champ.id));
       } else focusItem(null);
     } else {
       mistakes++;
+      missed.add(item.id);
       message = "Not there. Try another place.";
       render();
       focusItem(selected);
@@ -1615,6 +1670,7 @@ async function startAccount(root) {
         up to 100 per game, and every ${EXP_PER_LEVEL} EXP is a new level.</p>
     </header>
     <div id="rank-summary"></div>
+    <a class="btn-quiet account-champions-link" href="#/champions">See my top champions</a>
     <div id="progress-list"><p class="loading" role="status">Loading your progress…</p></div>
     <section class="danger-zone" aria-labelledby="delete-heading">
       <h2 id="delete-heading">Delete account</h2>
@@ -1690,7 +1746,408 @@ async function startAccount(root) {
 }
 
 /* =====================================================
-   SECTION 11: LEADERBOARD
+   SECTION 10B: MY CHAMPIONS (#/champions)
+   The champions this player got right most often. #1 is their favorite counter.
+   ===================================================== */
+function timesText(n) {
+  return `${n} ${n === 1 ? "time" : "times"}`;
+}
+
+async function startChampions(root) {
+  if (!getSession()) {
+    root.innerHTML = `${crumbHtml()}
+      <header class="game-head"><h1>My champions</h1>
+        <p>Log in to see the champions you get right most often.</p></header>
+      <div class="auth-actions"><a class="btn" href="#/login">Log in</a> <a class="btn-quiet" href="#/register">Sign up</a></div>`;
+    return;
+  }
+  root.innerHTML = `${crumbHtml()}
+    <header class="game-head"><h1>My champions</h1>
+      <p>Every champion you answer correctly is counted. The one you get right most often is your favorite counter.</p></header>
+    <div id="champions-body"><p class="loading" role="status">Loading your champions…</p></div>`;
+
+  const res = await api("/api/v1/users/me/characters?limit=10", { auth: true });
+  if (location.hash !== "#/champions") return;
+  if (!getSession()) { route(); return; }
+  const body = root.querySelector("#champions-body");
+  if (!res.ok) {
+    body.innerHTML = `<p class="error">${escapeHtml(errorMessage(res.data, "Couldn't load your champions."))}</p>`;
+    return;
+  }
+
+  const list = res.data.characters;
+  favoriteChamp = res.data.favorite;
+  renderHeroNote();
+  if (!list.length) {
+    body.innerHTML = `<div class="empty-champions">
+        <p>No champions counted yet. Win a Loldle round or answer a quiz question correctly and they'll show up here.</p>
+        <button type="button" class="btn" id="champions-play">Play a random game</button>
+      </div>`;
+    body.querySelector("#champions-play").addEventListener("click", playRandomGame);
+    return;
+  }
+
+  const [fav, ...rest] = list;
+  body.innerHTML = `
+    <section class="favorite-card" aria-labelledby="favorite-heading">
+      ${portraitHtml(fav, "xl")}
+      <div class="favorite-text">
+        <p class="favorite-label" id="favorite-heading">Your favorite counter</p>
+        <h2 class="favorite-name">${escapeHtml(fav.name)}</h2>
+        <p class="favorite-title">${escapeHtml(fav.title || "")}</p>
+        <p class="favorite-count">Guessed right <span class="num">${timesText(fav.times_correct)}</span></p>
+      </div>
+    </section>
+    ${rest.length ? `<h2 class="champions-heading">Your next best</h2>
+    <ol class="champion-ranks" start="2">${rest.map((c, i) => `
+      <li>
+        <span class="rank num" aria-hidden="true">${i + 2}</span>
+        ${portraitHtml(c, "md")}
+        <span class="rank-text"><span class="rank-name">${escapeHtml(c.name)}</span>
+          <span class="rank-title">${escapeHtml(c.title || "")}</span></span>
+        <span class="rank-count num">${timesText(c.times_correct)}</span>
+      </li>`).join("")}</ol>` : ""}`;
+  watchBrokenImages(body);
+}
+
+/* =====================================================
+   SECTION 11: ADMIN PANEL
+   #/admin: create accounts, reset passwords, change roles, deactivate and delete.
+   Hiding the Admin link from players is only a convenience. The real protection
+   is the API, which answers 403 to every admin request from a non-admin.
+   ===================================================== */
+
+function isAdmin() {
+  const session = getSession();
+  return Boolean(session && session.role === "admin");
+}
+
+// Asks the API for the logged-in account's role and keeps it with the session.
+// An API without the admin update answers 404, which counts as "not an admin".
+async function refreshRole() {
+  if (!getSession()) return;
+  const res = await api("/api/v1/users/me/role", { auth: true });
+  if (!res.ok && res.status !== 404) return;   // offline or server error: keep what we had
+  const session = getSession();
+  if (!session) return;
+  const role = res.ok ? res.data.role : "user";
+  if (session.role !== role) {
+    saveSession({ ...session, role });
+    renderAccountBar();
+  }
+}
+
+const ROLE_NAMES = { user: "Player", admin: "Admin" };
+
+function modeName(slug) {
+  const mode = CATEGORIES.flatMap((c) => c.modes).find((m) => m.href === `#/${slug}`);
+  return mode ? mode.name : slug;
+}
+
+function adminDeniedHtml(text) {
+  return `${crumbHtml()}
+    <header class="game-head"><h1>Admin</h1><p>${text}</p></header>
+    <a class="btn" href="#/">Back to all games</a>`;
+}
+
+async function startAdmin(root) {
+  if (!getSession()) {
+    root.innerHTML = `${crumbHtml()}
+      <header class="game-head"><h1>Admin</h1><p>Log in with an admin account to manage players.</p></header>
+      <div class="auth-actions"><a class="btn" href="#/login">Log in</a></div>`;
+    return;
+  }
+  root.innerHTML = `${crumbHtml()}
+    <header class="game-head"><h1>Admin</h1><p class="loading" role="status">Checking your access…</p></header>`;
+  await refreshRole();
+  if (location.hash !== "#/admin") return;   // left while checking
+  if (!getSession()) { route(); return; }
+  if (!isAdmin()) {
+    root.innerHTML = adminDeniedHtml("This page is for admin accounts only.");
+    return;
+  }
+
+  const me = getSession().username.toLowerCase();
+  let users = [];
+  let open = null;        // { id, kind: "progress" | "password" | "delete" }
+  let requestId = 0;      // ignores slow search results that arrive after newer ones
+
+  root.innerHTML = `
+    ${crumbHtml()}
+    <header class="game-head">
+      <h1>Admin</h1>
+      <p>Create accounts, reset passwords and manage who can play. Changes apply straight away.</p>
+    </header>
+
+    <section class="admin-create" aria-labelledby="create-heading">
+      <h2 id="create-heading">Create an account</h2>
+      <form class="admin-create-form" novalidate>
+        <label>Username
+          <input name="username" autocomplete="off" spellcheck="false" maxlength="50">
+        </label>
+        <label>Password
+          <input name="password" type="password" autocomplete="new-password" maxlength="128">
+        </label>
+        <label>Role
+          <select name="role"><option value="user">Player</option><option value="admin">Admin</option></select>
+        </label>
+        <button type="submit" class="btn">Create account</button>
+      </form>
+      <p class="field-hint">Usernames use 3 to 50 letters, numbers and underscores. Passwords need at least 8 characters.</p>
+      <p class="form-error" role="alert" hidden></p>
+    </section>
+
+    <section class="admin-users" aria-labelledby="users-heading">
+      <div class="admin-toolbar">
+        <h2 id="users-heading">Accounts</h2>
+        <span class="admin-count" role="status"></span>
+        <label class="admin-search"><span class="sr-only">Search usernames</span>
+          <input type="search" placeholder="Search usernames" maxlength="50" spellcheck="false">
+        </label>
+      </div>
+      <div class="admin-list"><p class="loading" role="status">Loading accounts…</p></div>
+    </section>`;
+
+  const createForm = root.querySelector(".admin-create-form");
+  const createError = root.querySelector(".admin-create .form-error");
+  const createButton = createForm.querySelector("button");
+  const searchInput = root.querySelector(".admin-search input");
+  const countEl = root.querySelector(".admin-count");
+  const listEl = root.querySelector(".admin-list");
+
+  const stillHere = () => location.hash === "#/admin" && root.isConnected;
+
+  // Shared handling for failed admin requests. Returns true if the page was replaced.
+  function handleAccessLoss(res) {
+    if (res.status === 401) { route(); return true; }   // session ended: api() already logged out
+    if (res.status === 403) {
+      saveSession({ ...getSession(), role: "user" });
+      renderAccountBar();
+      root.innerHTML = adminDeniedHtml("Your account no longer has admin access.");
+      return true;
+    }
+    return false;
+  }
+
+  async function load() {
+    const id = ++requestId;
+    const q = searchInput.value.trim();
+    const res = await api(`/api/v1/admin/users${q ? `?search=${encodeURIComponent(q)}` : ""}`, { auth: true });
+    if (id !== requestId || !stillHere()) return;
+    if (!res.ok) {
+      if (handleAccessLoss(res)) return;
+      listEl.innerHTML = `<p class="error">${escapeHtml(errorMessage(res.data, "Couldn't load the accounts."))}</p>`;
+      return;
+    }
+    users = res.data.users;
+    if (open && !users.some((u) => u.id === open.id)) open = null;
+    renderList();
+  }
+
+  function actionsHtml(user, isSelf) {
+    const pressed = (kind) => (open && open.id === user.id && open.kind === kind ? "true" : "false");
+    const name = escapeHtml(user.username);
+    const buttons = [
+      `<button type="button" class="admin-btn" data-action="progress" aria-expanded="${pressed("progress")}" aria-label="Progress for ${name}">Progress</button>`,
+      `<button type="button" class="admin-btn" data-action="password" aria-expanded="${pressed("password")}" aria-label="Reset password for ${name}">Reset password</button>`,
+    ];
+    if (isSelf) return buttons.join("");
+    buttons.push(
+      `<button type="button" class="admin-btn" data-action="role">${user.role === "admin" ? "Make player" : "Make admin"}</button>`,
+      `<button type="button" class="admin-btn" data-action="active">${user.is_active ? "Deactivate" : "Activate"}</button>`,
+      `<button type="button" class="admin-btn admin-btn-danger" data-action="delete" aria-expanded="${pressed("delete")}" aria-label="Delete ${name}">Delete</button>`,
+    );
+    return buttons.join("");
+  }
+
+  function panelHtml(user) {
+    const name = escapeHtml(user.username);
+    if (open.kind === "progress") {
+      return `<p class="loading" role="status">Loading ${name}'s progress…</p>`;
+    }
+    if (open.kind === "password") {
+      return `<form class="admin-inline-form" data-form="password" novalidate>
+          <label>New password for ${name}
+            <input name="newPassword" type="password" autocomplete="new-password" maxlength="128">
+          </label>
+          <button type="submit" class="btn btn-small">Save password</button>
+          <button type="button" class="btn-quiet btn-small" data-action="close">Cancel</button>
+          <p class="form-error" role="alert" hidden></p>
+        </form>`;
+    }
+    return `<div class="admin-inline-form admin-confirm">
+        <p>Delete <strong>${name}</strong> and all of their EXP? This can't be undone.</p>
+        <button type="button" class="btn btn-danger btn-small" data-action="confirm-delete">Delete ${name}</button>
+        <button type="button" class="btn-quiet btn-small" data-action="close">Cancel</button>
+        <p class="form-error" role="alert" hidden></p>
+      </div>`;
+  }
+
+  function renderList() {
+    countEl.textContent = `${users.length} ${users.length === 1 ? "account" : "accounts"}`;
+    if (!users.length) {
+      listEl.innerHTML = `<p class="empty">${searchInput.value.trim()
+        ? "No usernames match that search."
+        : "No accounts yet. Create one above."}</p>`;
+      return;
+    }
+    listEl.innerHTML = `<table class="admin-table">
+      <thead><tr>
+        <th scope="col">Username</th><th scope="col">Role</th><th scope="col">Status</th>
+        <th scope="col">Level</th><th scope="col"><span class="sr-only">Actions</span></th>
+      </tr></thead>
+      <tbody>${users.map((user) => {
+        const isSelf = user.username.toLowerCase() === me;
+        const row = `<tr data-id="${user.id}"${user.is_active ? "" : ` class="is-inactive"`}>
+          <th scope="row"><span class="admin-name">${escapeHtml(user.username)}</span>${isSelf ? ` <span class="you-tag">You</span>` : ""}</th>
+          <td data-label="Role"><span class="role-badge" data-role="${user.role}">${ROLE_NAMES[user.role] || user.role}</span></td>
+          <td data-label="Status"><span class="status" data-active="${user.is_active}">${user.is_active ? "Active" : "Deactivated"}</span></td>
+          <td data-label="Level"><span class="num">Level ${user.level}</span> <span class="admin-exp num">${user.total_exp} EXP</span></td>
+          <td class="admin-actions"><div class="admin-actions-inner">${actionsHtml(user, isSelf)}</div></td>
+        </tr>`;
+        const panel = open && open.id === user.id
+          ? `<tr class="admin-panel-row" data-panel-for="${user.id}"><td colspan="5">${panelHtml(user)}</td></tr>`
+          : "";
+        return row + panel;
+      }).join("")}</tbody>
+    </table>`;
+
+    if (!open) return;
+    const panel = listEl.querySelector(`[data-panel-for="${open.id}"]`);
+    if (open.kind === "progress") loadProgress(open.id, panel);
+    if (open.kind === "password") panel.querySelector("input").focus();
+    if (open.kind === "delete") panel.querySelector("[data-action=confirm-delete]").focus();
+  }
+
+  async function loadProgress(id, panel) {
+    const res = await api(`/api/v1/admin/users/${id}`, { auth: true });
+    if (!stillHere() || !panel.isConnected) return;
+    const cell = panel.querySelector("td");
+    if (!res.ok) {
+      if (handleAccessLoss(res)) return;
+      cell.innerHTML = `<p class="error">${escapeHtml(errorMessage(res.data, "Couldn't load this player's progress."))}</p>`;
+      return;
+    }
+    cell.innerHTML = `<ul class="admin-progress">${res.data.progress.map((p) => `
+        <li><span class="admin-mode">${escapeHtml(modeName(p.slug))}</span>
+          <span class="num">Level ${p.level}</span>
+          <span class="admin-exp num">${p.exp} EXP</span>
+          ${expBarHtml(p.exp % EXP_PER_LEVEL)}</li>`).join("")}</ul>`;
+  }
+
+  function toggle(id, kind) {
+    open = open && open.id === id && open.kind === kind ? null : { id, kind };
+    renderList();
+    if (!open) listEl.querySelector(`tr[data-id="${id}"] [data-action="${kind}"]`)?.focus();
+  }
+
+  // Runs one admin request, then reloads the list. Returns true on success.
+  async function run(request, success, errorEl) {
+    const res = await api(request.path, { method: request.method, body: request.body, auth: true });
+    if (!stillHere()) return false;
+    if (!res.ok) {
+      if (handleAccessLoss(res)) return false;
+      const text = errorMessage(res.data, "That didn't work. Please try again.");
+      if (errorEl) { errorEl.textContent = text; errorEl.hidden = false; } else showToast(text);
+      return false;
+    }
+    showToast(success);
+    return true;
+  }
+
+  listEl.addEventListener("click", async (e) => {
+    const button = e.target.closest("button[data-action]");
+    if (!button) return;
+    const id = Number(button.closest("tr").dataset.id || button.closest("tr").dataset.panelFor);
+    const user = users.find((u) => u.id === id);
+    if (!user) return;
+    const action = button.dataset.action;
+
+    if (action === "progress" || action === "password" || action === "delete") { toggle(id, action); return; }
+    if (action === "close") { toggle(id, open.kind); return; }
+
+    button.disabled = true;
+    let ok = false;
+    if (action === "role") {
+      const role = user.role === "admin" ? "user" : "admin";
+      ok = await run({ path: `/api/v1/admin/users/${id}`, method: "PATCH", body: { role } },
+        role === "admin" ? `${user.username} is now an admin.` : `${user.username} is now a player.`);
+    } else if (action === "active") {
+      const isActive = !user.is_active;
+      ok = await run({ path: `/api/v1/admin/users/${id}`, method: "PATCH", body: { is_active: isActive } },
+        isActive ? `Activated ${user.username}.` : `Deactivated ${user.username}. They can't log in until you activate them.`);
+    } else if (action === "confirm-delete") {
+      const errorEl = button.parentElement.querySelector(".form-error");
+      ok = await run({ path: `/api/v1/admin/users/${id}`, method: "DELETE" }, `Deleted ${user.username}.`, errorEl);
+      if (ok) open = null;
+    }
+    if (!stillHere()) return;
+    button.disabled = false;
+    if (ok) await load();
+  });
+
+  listEl.addEventListener("submit", async (e) => {
+    const form = e.target.closest("[data-form=password]");
+    if (!form) return;
+    e.preventDefault();
+    const id = Number(form.closest("tr").dataset.panelFor);
+    const user = users.find((u) => u.id === id);
+    const errorEl = form.querySelector(".form-error");
+    const password = form.elements.newPassword.value;
+    errorEl.hidden = true;
+    if (password.length < 8 || password.length > 128) {
+      errorEl.textContent = "The new password must be 8 to 128 characters.";
+      errorEl.hidden = false;
+      return;
+    }
+    const submit = form.querySelector("button[type=submit]");
+    submit.disabled = true;
+    submit.textContent = "Saving…";
+    const ok = await run(
+      { path: `/api/v1/admin/users/${id}/password`, method: "PATCH", body: { new_password: password } },
+      `Saved a new password for ${user.username}.`, errorEl);
+    if (!stillHere()) return;
+    if (ok) { open = null; renderList(); return; }
+    submit.disabled = false;
+    submit.textContent = "Save password";
+  });
+
+  createForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    createError.hidden = true;
+    const username = createForm.elements.username.value.trim();
+    const password = createForm.elements.password.value;
+    const role = createForm.elements.role.value;
+    const problem = signUpProblem(username, password, password);
+    if (problem) {
+      createError.textContent = problem.replace("Your username", "The username").replace("Your password", "The password");
+      createError.hidden = false;
+      return;
+    }
+    createButton.disabled = true;
+    createButton.textContent = "Creating…";
+    const ok = await run({ path: "/api/v1/admin/users", method: "POST", body: { username, password, role } },
+      `Created ${username} as ${role === "admin" ? "an admin" : "a player"}.`, createError);
+    if (!stillHere()) return;
+    createButton.disabled = false;
+    createButton.textContent = "Create account";
+    if (ok) {
+      createForm.reset();
+      await load();
+    }
+  });
+
+  let searchTimer;
+  searchInput.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(load, 250);
+  });
+
+  await load();
+}
+
+/* =====================================================
+   SECTION 12: LEADERBOARD
    #/leaderboard: the top players by total EXP, from the API's leaderboard view.
    ===================================================== */
 function leaderRowHtml(p, isMe) {
@@ -1750,6 +2207,7 @@ renderCategories();
 checkApi();
 loadRanks();
 refreshProgress();
+refreshFavorite();
+refreshRole();   // the role can change while the player is away, so check it on every visit
 window.addEventListener("hashchange", route);
 route();   // open the right screen when the page loads on a #/ address
-route();
