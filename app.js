@@ -38,7 +38,8 @@ const SESSION_KEY = "moba-hub:session";
 const EXP_PER_LEVEL = 100; // must match EXP_PER_LEVEL in the API's rules.py
 
 let progressBySlug = {};   // game mode slug -> total EXP, filled after login
-let ranks = [];            // [{ name, min_level }] from the API, lowest rank first
+let standing = null;       // overall rank from the API: { position, total_exp, level, rank, rank_image, next_rank, next_rank_level }
+let ranks = [];            // every rank from the API, only used for the "All ranks" list
 
 function getSession() {
   try {
@@ -55,6 +56,7 @@ function saveSession(session) {
 function clearSession() {
   try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
   progressBySlug = {};
+  standing = null;
   favoriteChamp = null;
   renderAccountBar();
   renderCategories();
@@ -64,28 +66,17 @@ function levelFor(exp) {
   return 1 + Math.floor(exp / EXP_PER_LEVEL);
 }
 
-// Ranks live in the database. The player's rank is the highest one whose min_level they have reached.
-function rankFor(level) {
-  let found = null;
-  for (const r of ranks) if (level >= r.min_level) found = r;
-  return found;
-}
-
-function nextRankFor(level) {
-  return ranks.find((r) => r.min_level > level) || null;
-}
-
+// The rank list comes from the database. A player's own rank is stored by the database
+// (users.rank_id) and arrives in `standing`, so the browser never works a rank out.
 async function loadRanks() {
   const res = await api("/api/v1/ranks");
-  if (res.ok) {
-    ranks = res.data.ranks;
-    renderAccountBar();
-  }
+  if (res.ok) ranks = res.data.ranks;
 }
 
-// Rank name as a coloured tag. Colours are set per rank in style.css.
-function rankTagHtml(name) {
-  return `<span class="rank-tag" data-rank="${escapeHtml(String(name).toLowerCase())}">${escapeHtml(name)}</span>`;
+// Rank badge: the image from the ranks table (when it has one) and the name, coloured per rank in style.css.
+function rankTagHtml(name, image) {
+  const img = image ? `<img class="rank-img" src="${IMAGE_BASE}${escapeHtml(image)}" alt="" loading="lazy" onerror="this.remove()">` : "";
+  return `<span class="rank-tag" data-rank="${escapeHtml(String(name).toLowerCase())}">${img}${escapeHtml(name)}</span>`;
 }
 
 // The hexagonal level crest. The outline is the EXP bar: it fills clockwise from the top
@@ -186,6 +177,7 @@ async function refreshProgress() {
   const res = await api("/api/v1/users/me/progress", { auth: true });
   if (res.ok) {
     progressBySlug = Object.fromEntries(res.data.progress.map((p) => [p.slug, p.exp]));
+    standing = res.data.standing || null;
     renderCategories();
     renderAccountBar();
   }
@@ -225,7 +217,9 @@ async function awardExp(slug, correct, total, onUpdate) {
 
   const { exp_gained: gained, exp, level } = res.data;
   const before = progressBySlug[slug] || 0;
+  const rankBefore = standing && standing.rank;
   progressBySlug[slug] = exp;
+  if (res.data.standing) standing = res.data.standing;
   renderCategories();
   renderAccountBar();
   const into = exp % EXP_PER_LEVEL;
@@ -242,7 +236,8 @@ async function awardExp(slug, correct, total, onUpdate) {
       </span>
     </span>`);
   animateRewards();
-  if (leveledUp) showToast(`Level up! You reached level ${level}.`);
+  if (standing && rankBefore && standing.rank !== rankBefore) showToast(`Rank up! You're now ${standing.rank}.`);
+  else if (leveledUp) showToast(`Level up! You reached level ${level}.`);
 }
 
 /* ---------- Favorite counter ----------
@@ -335,12 +330,11 @@ function renderAccountBar() {
       <a class="btn btn-small" href="#/register">Sign up</a>`;
   } else {
     const level = overallLevel();
-    const rank = rankFor(level);
     el.innerHTML = `${board}${isAdmin() ? `<a class="account-link admin-link" href="#/admin">Admin</a>` : ""}
       <a class="player" href="#/account" title="See your progress">
         ${crestHtml(level, totalExp() % EXP_PER_LEVEL)}
         <span class="player-text"><span class="player-name">${escapeHtml(session.username)}</span>
-          <span class="player-sub">${rank ? rankTagHtml(rank.name) : `Level ${level}`}</span></span>
+          <span class="player-sub">${standing ? rankTagHtml(standing.rank, standing.rank_image) : `Level ${level}`}</span></span>
       </a>
       <button type="button" class="account-link" data-action="logout">Log out</button>`;
     el.querySelector("[data-action=logout]").addEventListener("click", () => {
@@ -364,7 +358,7 @@ function renderHeroNote() {
     return;
   }
   el.innerHTML = session
-    ? `Welcome back, ${escapeHtml(session.username)}. You're level ${overallLevel()}${rankFor(overallLevel()) ? `, ${escapeHtml(rankFor(overallLevel()).name)}` : ""}.`
+    ? `Welcome back, ${escapeHtml(session.username)}. You're level ${overallLevel()}${standing ? `, ${escapeHtml(standing.rank)}` : ""}.`
     : `<a href="#/register">Create an account</a> to save your EXP.`;
 }
 
@@ -1717,15 +1711,14 @@ async function startAccount(root) {
   if (!getSession()) { route(); return; }      // the session ended while it loaded
 
   const level = overallLevel();
-  const rank = rankFor(level);
-  const next = nextRankFor(level);
   root.querySelector("#rank-summary").innerHTML = `<section class="rank-card">
       ${crestHtml(level, totalExp() % EXP_PER_LEVEL, "crest-lg")}
       <div class="rank-card-body">
-        <p class="rank-card-title">${rank ? rankTagHtml(rank.name) : ""} <span>Level ${level}, ${totalExp()} EXP</span></p>
-        <p class="rank-card-next">${next
-          ? `${EXP_PER_LEVEL - totalExp() % EXP_PER_LEVEL} EXP to level ${level + 1}. ${escapeHtml(next.name)} starts at level ${next.min_level}.`
-          : "You've reached the top rank."}</p>
+        <p class="rank-card-title">${standing ? rankTagHtml(standing.rank, standing.rank_image) : ""} <span>Level ${level}, ${totalExp()} EXP</span></p>
+        <p class="rank-card-next">${EXP_PER_LEVEL - totalExp() % EXP_PER_LEVEL} EXP to level ${level + 1}.
+          ${standing && standing.next_rank
+            ? `${escapeHtml(standing.next_rank)} starts at level ${standing.next_rank_level}.`
+            : "You've reached the top rank."}</p>
         <a href="#/leaderboard">See the leaderboard</a>
       </div>
     </section>`;
@@ -2154,7 +2147,7 @@ function leaderRowHtml(p, isMe) {
   return `<li class="${isMe ? "is-me" : ""}" data-place="${p.position <= 3 ? p.position : ""}">
       <span class="lb-place">${p.position}</span>
       <span class="lb-name">${escapeHtml(p.username)}${isMe ? ` <span class="lb-you">you</span>` : ""}</span>
-      <span class="lb-rank">${rankTagHtml(p.rank)}</span>
+      <span class="lb-rank">${rankTagHtml(p.rank, p.rank_image)}</span>
       <span class="lb-level">Level ${p.level}</span>
       <span class="lb-exp">${p.total_exp.toLocaleString()} EXP</span>
     </li>`;
@@ -2192,7 +2185,7 @@ async function startLeaderboard(root) {
     if (!list) return;
     list.innerHTML = ranks.map((r, i) => {
       const upper = ranks[i + 1] ? `Levels ${r.min_level} to ${ranks[i + 1].min_level - 1}` : `Level ${r.min_level} and up`;
-      return `<li>${rankTagHtml(r.name)} <span>${upper}</span></li>`;
+      return `<li>${rankTagHtml(r.name, r.image)} <span>${upper}</span></li>`;
     }).join("");
   };
   if (ranks.length) showLadder(); else loadRanks().then(showLadder);
@@ -2205,7 +2198,6 @@ document.getElementById("random-game").addEventListener("click", playRandomGame)
 renderAccountBar();
 renderCategories();
 checkApi();
-loadRanks();
 refreshProgress();
 refreshFavorite();
 refreshRole();   // the role can change while the player is away, so check it on every visit
