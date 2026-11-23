@@ -64,10 +64,10 @@ The API returns:
 | `playstyle` | `"Ambush"` | Classic, Odd One Out, True or False. |
 | `damage_type` | `"AD"` | Classic, Odd One Out, True or False. |
 | `attack_type` | `"Melee"` | Classic, Odd One Out, True or False. |
-| `mobility` | `"High"` | Classic, Odd One Out, True or False. |
-| `difficulty` | `"Hard"` | Classic, Odd One Out, True or False. |
+| `mobility` | `"High"` | Odd One Out, True or False. |
+| `difficulty` | `"Hard"` | Odd One Out, True or False. |
 | `skill_floor` | `4` | Higher or Lower. |
-| `skill_ceiling` | `5` | Classic, Higher or Lower. |
+| `skill_ceiling` | `5` | Higher or Lower. |
 | `year_released` | `2012` | Classic, Higher or Lower, True or False. |
 
 The other 18 fields (for example `faction`, `origin`, `weapon`, `personality`, `allies`, `enemies`) are fetched but not used yet. They are available if you want to add games or clues.
@@ -75,7 +75,7 @@ The other 18 fields (for example `faction`, `origin`, `weapon`, `personality`, `
 ### Data conventions the project relies on
 
 - **Multi-value fields.** `role` and `region` can hold several values separated by ` / `. The project splits them with `splitMulti()`.
-- **Ordered text values.** `mobility` is `Low`, `Medium` or `High`, and `difficulty` is `Easy`, `Medium` or `Hard`. Classic ranks them in that order to show higher/lower arrows. A different spelling in the data would break the arrows, so keep these values consistent.
+- **Ordered text values.** `mobility` is `Low`, `Medium` or `High`, and `difficulty` is `Easy`, `Medium` or `Hard`. Odd One Out and True or False rank them in that order. A different spelling in the data would break the arrows, so keep these values consistent.
 - **Numbers are numbers.** `skill_floor`, `skill_ceiling` and `year_released` are numeric. They are compared as numbers.
 - **Small naming differences are handled.** A leading "The" is ignored when comparing regions, so "The Void" and "Void" match.
 
