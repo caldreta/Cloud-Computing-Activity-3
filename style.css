@@ -384,10 +384,8 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
   clip-path: inherit; background: radial-gradient(circle at 50% 30%, #1b2c48, #0a1428);
   color: var(--gold-hi); font: 600 1rem var(--font-body);
 }
-.player-text { display: grid; line-height: 1.25; }
 .player-name { color: var(--gold-hi); font-weight: 600; }
-.player-sub { color: var(--muted); font-size: .78rem; }
-.player-text .rank-tag { font-size: .8rem; }
+.player .rank-tag { font-size: .85rem; }
 .player:hover .player-name, .player:focus-visible .player-name { color: var(--gold); text-decoration: underline; }
 
 /* EXP reward inside result panels */
@@ -506,40 +504,74 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
 .hero-favorite:hover strong { text-decoration: underline; }
 .account-champions-link { margin: -.6rem 0 1.6rem; }
 
-.favorite-card {
-  display: flex; align-items: center; gap: 1.6rem; max-width: 40rem; margin-bottom: 2.25rem; padding: 1.4rem 1.6rem;
-  background: radial-gradient(30rem 14rem at 0% 50%, rgba(200, 170, 110, .16), transparent 70%), linear-gradient(180deg, var(--surface-2), var(--surface));
+/* ----- champion showcase (modelled on a game's "achievement unlocked" screen) ----- */
+.showcase {
+  position: relative; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); min-height: 22rem; overflow: hidden;
+  background:
+    radial-gradient(34rem 20rem at 76% 38%, rgba(70, 150, 240, .34), transparent 66%),
+    radial-gradient(22rem 12rem at 84% 100%, rgba(10, 200, 185, .14), transparent 70%),
+    linear-gradient(135deg, #0c2150 0%, #071533 55%, #040d1f 100%);
   border: 1px solid var(--gold-lo); border-radius: var(--radius); box-shadow: 0 0 0 1px rgba(200, 170, 110, .15), var(--shadow-md);
 }
-.favorite-card .portrait-xl { flex: none; width: 8.5rem; height: 8.5rem; box-shadow: 0 0 0 1px var(--gold), 0 0 32px rgba(200, 170, 110, .35); }
-.favorite-text { min-width: 0; }
-.favorite-label { margin: 0 0 .2rem; color: var(--gold); font-weight: 700; font-size: .9rem; }
-.favorite-name {
-  margin: 0; font: 400 clamp(2rem, 6vw, 2.8rem)/1.05 var(--font-head);
-  background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent;
+.showcase::before {   /* faint light rings behind the badge */
+  content: ""; position: absolute; right: 8%; top: 50%; width: 22rem; height: 22rem; translate: 0 -50%; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle, transparent 54%, rgba(150, 200, 255, .10) 55%, transparent 57%, transparent 68%, rgba(150, 200, 255, .07) 69%, transparent 71%);
 }
-.favorite-title { margin: .25rem 0 .7rem; color: var(--muted); }
-.favorite-count { margin: 0; color: var(--gold-hi); }
+.showcase-art { position: relative; min-height: 100%; filter: drop-shadow(0 0 10px rgba(120, 190, 255, .55)) drop-shadow(0 0 1px rgba(240, 230, 210, .8)); }
+.showcase-art-clip {
+  position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; background: #0a1428;
+  clip-path: ellipse(96% 100% at 0% 50%);
+  color: var(--gold); font: 400 5rem var(--font-head);
+}
+.showcase-art-clip::before { content: attr(data-initial); }
+.showcase-art-clip img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 25%; }
+.showcase-art-clip img.broken { display: none; }
+.showcase-info { position: relative; display: grid; justify-items: center; align-content: center; gap: .55rem; padding: 1.6rem 1.4rem 1.6rem .8rem; text-align: center; }
+.showcase-chip {
+  padding: .2rem 1.2rem; color: var(--gold-hi); font: 700 .78rem var(--font-body); letter-spacing: .12em; text-transform: uppercase;
+  background: linear-gradient(90deg, transparent, rgba(200, 170, 110, .28), transparent); border-block: 1px solid var(--gold-lo);
+}
+.count-badge { position: relative; display: grid; place-items: center; width: 9.5rem; height: 10.6rem; margin-block: .3rem; filter: drop-shadow(0 0 16px rgba(240, 200, 110, .35)); }
+.count-badge svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.count-ring { fill: none; stroke: var(--gold); stroke-width: 4; stroke-linejoin: round; }
+.count-ring-inner { fill: rgba(10, 20, 40, .55); stroke: #f0d9a0; stroke-width: 1.5; stroke-linejoin: round; }
+.count-num { position: relative; grid-area: 1 / 1; align-self: center; margin-top: -.9rem; font: 700 3.2rem/1 var(--font-body); font-variant-numeric: tabular-nums;
+  background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.count-cap { position: relative; grid-area: 1 / 1; align-self: center; margin-top: 3.6rem; color: var(--gold-hi); font: 600 .72rem var(--font-body); letter-spacing: .14em; text-transform: uppercase; }
+.showcase-name { margin: 0; font: 400 clamp(1.8rem, 4.5vw, 2.5rem)/1.05 var(--font-head); background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.showcase-title { margin: 0; color: #9db4d6; }
+.showcase-desc { margin: .2rem 0 0; max-width: 22rem; color: #8fa6c8; font-size: .92rem; }
+.showcase-desc strong { color: var(--gold-hi); }
+.showcase-hint { margin: .8rem 0 .5rem; color: var(--muted); font-size: .85rem; }
 
-.champions-heading { margin: 0 0 .7rem; color: var(--gold-hi); font: 400 1.15rem var(--font-head); }
-.champion-ranks { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; max-width: 40rem; }
-.champion-ranks li {
-  display: grid; grid-template-columns: 1.6rem auto 1fr auto; align-items: center; gap: .9rem;
-  padding: .55rem 1rem; background: linear-gradient(180deg, var(--surface-2), var(--surface));
-  border: 1px solid var(--line); border-radius: var(--radius);
+.showcase-strip { display: flex; gap: .55rem; overflow-x: auto; padding: .25rem .25rem .8rem; scroll-snap-type: x proximity; scrollbar-width: thin; scrollbar-color: var(--gold-lo) transparent; }
+.strip-item {
+  flex: none; scroll-snap-align: center; display: grid; grid-template-columns: 1.2rem auto auto; align-items: center; gap: .6rem; width: 12.5rem; padding: .5rem .8rem .5rem .6rem;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface)); border: 1px solid var(--line); border-radius: var(--radius);
 }
-.rank { color: var(--muted); text-align: center; }
-.champion-ranks .portrait-md { width: 3rem; height: 3rem; }
-.rank-text { display: grid; min-width: 0; }
-.rank-name { color: var(--gold-hi); font-weight: 700; }
-.rank-title { color: var(--muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rank-count { color: var(--gold); white-space: nowrap; }
+.strip-item:hover { border-color: var(--line-strong); }
+.strip-item[aria-pressed="true"] { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(200, 170, 110, .4), 0 0 18px rgba(200, 170, 110, .18); }
+.strip-item:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.strip-rank { color: var(--muted); text-align: center; font-size: .85rem; }
+.strip-item .portrait-md { width: 2.8rem; height: 2.8rem; }
+.strip-text { display: grid; min-width: 0; }
+.strip-name { color: var(--gold-hi); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.strip-count { color: var(--gold); font-size: .8rem; white-space: nowrap; }
+@media (prefers-reduced-motion: no-preference) {
+  .showcase.swap .showcase-info, .showcase.swap .showcase-art-clip { animation: fade .45s ease both; }
+}
+@media (max-width: 44rem) {
+  .showcase { grid-template-columns: 1fr; min-height: 0; }
+  .showcase-art { height: 12rem; }
+  .showcase-art-clip { clip-path: ellipse(100% 98% at 50% 0%); }
+  .showcase-info { padding: .6rem 1.2rem 1.6rem; }
+}
+
 .empty-champions { max-width: 32rem; }
 .empty-champions p { color: var(--muted); }
 
 @media (max-width: 34rem) {
-  .favorite-card { flex-direction: column; align-items: flex-start; gap: 1rem; padding: 1.2rem; }
-  .favorite-card .portrait-xl { width: 7rem; height: 7rem; }
   .hero-favorite { margin: .5rem 0 0; display: flex; }
 }
 
@@ -703,7 +735,7 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
   .page { padding: 2rem 1rem 4rem; }
   .topbar-inner { padding: .6rem 1rem; }
   .brand-name { font-size: 1rem; }
-  .player-text { display: none; }
+  .player-name { display: none; }
   .hero { margin-bottom: 2.25rem; }
   .quiz-option .key-hint { display: none; }
   .lb-list li { grid-template-columns: 2rem 1fr auto; row-gap: .1rem; }
@@ -722,3 +754,30 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
   /* very narrow phones: the diamond mark stands in for the name so the account links fit */
   .brand-name { display: none; }
 }
+
+/* =====================================================
+   ADMIN: ADD A CHAMPION (#/admin/champions)
+   ===================================================== */
+.admin-champions-link { margin: 0 0 1.5rem; }
+.cf-form { display: grid; gap: 1.4rem; max-width: 60rem; }
+.cf-group { margin: 0; padding: 1.1rem 1.3rem 1.3rem; background: linear-gradient(180deg, var(--surface-2), var(--surface)); border: 1px solid var(--line-strong); border-radius: var(--radius); }
+.cf-group legend { padding: 0 .5rem; color: var(--gold-hi); font: 400 1.15rem var(--font-head); letter-spacing: .01em; }
+.cf-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .9rem 1rem; }
+.cf-field { display: grid; align-content: start; gap: .35rem; min-width: 0; }
+.cf-field.cf-wide { grid-column: 1 / -1; }
+.cf-field label { color: var(--gold-hi); font-weight: 600; font-size: .85rem; }
+.cf-optional { color: var(--muted); font-weight: 500; }
+.cf-field input, .cf-field select, .cf-field textarea {
+  width: 100%; padding: .65rem .8rem; color: var(--gold-hi); font: 500 .95rem var(--font-body);
+  background: #050d1b; border: 1px solid var(--line-strong); border-radius: 2px; box-shadow: inset 0 2px 8px rgba(0, 0, 0, .5);
+}
+.cf-field textarea { resize: vertical; min-height: 4.5rem; }
+.cf-field select { cursor: pointer; }
+.cf-field input::placeholder, .cf-field textarea::placeholder { color: #5f6b7d; }
+.cf-field input:focus, .cf-field select:focus, .cf-field textarea:focus { outline: none; border-color: var(--gold); box-shadow: inset 0 2px 8px rgba(0, 0, 0, .5), 0 0 0 1px var(--gold); }
+.cf-field.has-error input, .cf-field.has-error select, .cf-field.has-error textarea { border-color: #b3343f; }
+.cf-field .field-hint { margin: 0; }
+.cf-error { margin: 0; color: #ff8a93; font-size: .82rem; }
+.cf-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .9rem; }
+@media (max-width: 52rem) { .cf-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 34rem) { .cf-grid { grid-template-columns: 1fr; } .cf-group { padding: 1rem; } }

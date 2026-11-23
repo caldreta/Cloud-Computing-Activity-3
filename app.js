@@ -333,8 +333,8 @@ function renderAccountBar() {
     el.innerHTML = `${board}${isAdmin() ? `<a class="account-link admin-link" href="#/admin">Admin</a>` : ""}
       <a class="player" href="#/account" title="See your progress">
         ${crestHtml(level, totalExp() % EXP_PER_LEVEL)}
-        <span class="player-text"><span class="player-name">${escapeHtml(session.username)}</span>
-          <span class="player-sub">${standing ? rankTagHtml(standing.rank, standing.rank_image) : `Level ${level}`}</span></span>
+        <span class="player-name">${escapeHtml(session.username)}</span>
+        ${standing ? rankTagHtml(standing.rank, standing.rank_image) : ""}
       </a>
       <button type="button" class="account-link" data-action="logout">Log out</button>`;
     el.querySelector("[data-action=logout]").addEventListener("click", () => {
@@ -527,6 +527,7 @@ const PAGES = {
   account: startAccount,
   leaderboard: startLeaderboard,
   admin: startAdmin,
+  "admin/champions": startAdminChampions,
   champions: startChampions,
 };
 
@@ -535,7 +536,7 @@ function route() {
   const start = GAMES[key] || PAGES[key];
   gameScreen.innerHTML = "";
   if (start) {
-    gameScreen.dataset.cat = GAMES[key] ? key.split("/")[0] : (key === "admin" || key === "leaderboard" ? key : "account");
+    gameScreen.dataset.cat = GAMES[key] ? key.split("/")[0] : (key.startsWith("admin") ? "admin" : key === "leaderboard" ? key : "account");
     hubScreen.hidden = true;
     gameScreen.hidden = false;
     window.scrollTo(0, 0);
@@ -550,7 +551,7 @@ function route() {
 
 function pageTitle(key) {
   const mode = CATEGORIES.flatMap((c) => c.modes).find((m) => m.href === `#/${key}`);
-  return mode ? mode.name : { login: "Log in", register: "Sign up", account: "My progress", leaderboard: "Leaderboard", admin: "Admin", champions: "My champions" }[key] || "Champion Games";
+  return mode ? mode.name : { login: "Log in", register: "Sign up", account: "My progress", leaderboard: "Leaderboard", admin: "Admin", "admin/champions": "Add a champion", champions: "My champions" }[key] || "Champion Games";
 }
 
 /* =====================================================
@@ -1780,27 +1781,76 @@ async function startChampions(root) {
     return;
   }
 
-  const [fav, ...rest] = list;
   body.innerHTML = `
-    <section class="favorite-card" aria-labelledby="favorite-heading">
-      ${portraitHtml(fav, "xl")}
-      <div class="favorite-text">
-        <p class="favorite-label" id="favorite-heading">Your favorite counter</p>
-        <h2 class="favorite-name">${escapeHtml(fav.name)}</h2>
-        <p class="favorite-title">${escapeHtml(fav.title || "")}</p>
-        <p class="favorite-count">Guessed right <span class="num">${timesText(fav.times_correct)}</span></p>
-      </div>
-    </section>
-    ${rest.length ? `<h2 class="champions-heading">Your next best</h2>
-    <ol class="champion-ranks" start="2">${rest.map((c, i) => `
-      <li>
-        <span class="rank num" aria-hidden="true">${i + 2}</span>
-        ${portraitHtml(c, "md")}
-        <span class="rank-text"><span class="rank-name">${escapeHtml(c.name)}</span>
-          <span class="rank-title">${escapeHtml(c.title || "")}</span></span>
-        <span class="rank-count num">${timesText(c.times_correct)}</span>
-      </li>`).join("")}</ol>` : ""}`;
+    <section class="showcase" id="showcase" aria-live="polite"></section>
+    <p class="showcase-hint">Your top ${list.length}. Scroll along the row and pick a champion to see it.</p>
+    <div class="showcase-strip" id="showcase-strip" role="group" aria-label="Your top champions">
+      ${list.map((c, i) => `
+        <button type="button" class="strip-item" data-i="${i}" aria-pressed="false">
+          <span class="strip-rank num" aria-hidden="true">${i + 1}</span>
+          ${portraitHtml(c, "md")}
+          <span class="strip-text"><span class="strip-name">${escapeHtml(c.name)}</span>
+            <span class="strip-count num">${timesText(c.times_correct)}</span></span>
+        </button>`).join("")}
+    </div>`;
+
+  const stage = body.querySelector("#showcase");
+  const strip = body.querySelector("#showcase-strip");
+  const items = [...strip.querySelectorAll(".strip-item")];
+  let current = -1;
+  function show(i, { scroll = false } = {}) {
+    if (i === current || i < 0 || i >= list.length) return;
+    current = i;
+    stage.innerHTML = showcaseHtml(list[i], i);
+    stage.classList.remove("swap");
+    void stage.offsetWidth;            // restart the fade
+    stage.classList.add("swap");
+    items.forEach((el, n) => el.setAttribute("aria-pressed", String(n === i)));
+    if (scroll) items[i].scrollIntoView({ block: "nearest", inline: "center", behavior: reduceMotion() ? "auto" : "smooth" });
+  }
+  strip.addEventListener("click", (e) => {
+    const item = e.target.closest(".strip-item");
+    if (item) show(Number(item.dataset.i));
+  });
+  strip.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    const next = Math.max(0, Math.min(list.length - 1, current + (e.key === "ArrowRight" ? 1 : -1)));
+    e.preventDefault();
+    show(next, { scroll: true });
+    items[next].focus();
+  });
+  show(0);
   watchBrokenImages(body);
+}
+
+// The hexagonal badge that shows how many times a champion was answered correctly.
+function countBadgeHtml(n) {
+  const hex = "M43.3 0 L86.6 25 L86.6 75 L43.3 100 L0 75 L0 25 Z";
+  return `<span class="count-badge" role="img" aria-label="${timesText(n)}">
+      <svg viewBox="-6 -6 98.6 112" aria-hidden="true" focusable="false">
+        <path class="crest-fill" d="${hex}"/>
+        <path class="count-ring" d="${hex}"/>
+        <path class="count-ring-inner" d="${hex}" transform="translate(7.8 9) scale(.82)"/>
+      </svg>
+      <span class="count-num">${n}</span>
+      <span class="count-cap">${n === 1 ? "time" : "times"}</span>
+    </span>`;
+}
+
+// One champion on the showcase screen: art on the left, the count on the right.
+function showcaseHtml(c, index) {
+  const src = imageUrl(c);
+  return `
+    <div class="showcase-art">
+      <div class="showcase-art-clip" data-initial="${escapeHtml(c.name[0])}">${src ? `<img src="${escapeHtml(src)}" alt="">` : ""}</div>
+    </div>
+    <div class="showcase-info">
+      <span class="showcase-chip">${index === 0 ? "Favorite counter" : `Top ${index + 1}`}</span>
+      ${countBadgeHtml(c.times_correct)}
+      <h2 class="showcase-name">${escapeHtml(c.name)}</h2>
+      <p class="showcase-title">${escapeHtml(c.title || "")}</p>
+      <p class="showcase-desc">Answered correctly <strong>${timesText(c.times_correct)}</strong> across all your games.</p>
+    </div>`;
 }
 
 /* =====================================================
@@ -1871,6 +1921,8 @@ async function startAdmin(root) {
       <h1>Admin</h1>
       <p>Create accounts, reset passwords and manage who can play. Changes apply straight away.</p>
     </header>
+
+    <a class="btn admin-champions-link" href="#/admin/champions">Add a champion</a>
 
     <section class="admin-create" aria-labelledby="create-heading">
       <h2 id="create-heading">Create an account</h2>
@@ -2137,6 +2189,170 @@ async function startAdmin(root) {
   });
 
   await load();
+}
+
+/* =====================================================
+   SECTION 11B: ADD A CHAMPION (#/admin/champions)
+   The form is built from the API's CharacterCreate schema (GET /api/v1/admin/characters/form),
+   so it always lists the same fields the database needs, with the same choices and limits.
+   ===================================================== */
+function champFieldHtml(f, games) {
+  const id = `cf-${f.name}`;
+  const attrs = `id="${id}" name="${f.name}"`;
+  let control;
+  if (f.widget === "game") {
+    control = `<select ${attrs}><option value="">Choose a game</option>${
+      games.map((g) => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join("")}</select>`;
+  } else if (f.widget === "select") {
+    control = `<select ${attrs}><option value="">Choose…</option>${
+      f.options.map((o) => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join("")}</select>`;
+  } else if (f.widget === "number") {
+    control = `<input ${attrs} type="number" inputmode="numeric" step="1"${f.min != null ? ` min="${f.min}"` : ""}${f.max != null ? ` max="${f.max}"` : ""}${f.example ? ` placeholder="e.g. ${escapeHtml(f.example)}"` : ""}>`;
+  } else if (f.widget === "textarea") {
+    control = `<textarea ${attrs} rows="3"${f.max_length ? ` maxlength="${f.max_length}"` : ""}></textarea>`;
+  } else {
+    control = `<input ${attrs} autocomplete="off" spellcheck="false"${f.max_length ? ` maxlength="${f.max_length}"` : ""}${f.example ? ` placeholder="e.g. ${escapeHtml(f.example)}"` : ""}>`;
+  }
+  return `<div class="cf-field${f.widget === "textarea" ? " cf-wide" : ""}" data-field="${f.name}">
+      <label for="${id}">${escapeHtml(f.label)}${f.required ? "" : ` <span class="cf-optional">(optional)</span>`}</label>
+      ${control}
+      ${f.hint ? `<p class="field-hint">${escapeHtml(f.hint)}</p>` : ""}
+      <p class="cf-error" role="alert" hidden></p>
+    </div>`;
+}
+
+async function startAdminChampions(root) {
+  const back = `<nav class="crumb" aria-label="Breadcrumb"><a href="#/">All games</a><span class="crumb-sep" aria-hidden="true">/</span><a href="#/admin">Admin</a><span class="crumb-sep" aria-hidden="true">/</span><span aria-current="page">Add a champion</span></nav>`;
+  if (!getSession()) {
+    root.innerHTML = `${crumbHtml()}
+      <header class="game-head"><h1>Add a champion</h1><p>Log in with an admin account to add champions.</p></header>
+      <div class="auth-actions"><a class="btn" href="#/login">Log in</a></div>`;
+    return;
+  }
+  root.innerHTML = `${back}<header class="game-head"><h1>Add a champion</h1><p class="loading" role="status">Checking your access…</p></header>`;
+  await refreshRole();
+  if (location.hash !== "#/admin/champions") return;
+  if (!getSession()) { route(); return; }
+  if (!isAdmin()) { root.innerHTML = adminDeniedHtml("This page is for admin accounts only."); return; }
+
+  const res = await api("/api/v1/admin/characters/form", { auth: true });
+  if (location.hash !== "#/admin/champions") return;
+  if (!res.ok) {
+    if (res.status === 401) { route(); return; }
+    if (res.status === 403) { root.innerHTML = adminDeniedHtml("Your account no longer has admin access."); return; }
+    root.innerHTML = `${back}<header class="game-head"><h1>Add a champion</h1></header>
+      <p class="error">${escapeHtml(errorMessage(res.data, res.status === 404
+        ? "The API doesn't have the add-champion update yet."
+        : "Couldn't load the form."))}</p>`;
+    return;
+  }
+  const { fields, games } = res.data;
+  const groups = [...new Set(fields.map((f) => f.group))];
+
+  function renderForm() {
+    root.innerHTML = `${back}
+      <header class="game-head">
+        <h1>Add a champion</h1>
+        <p>Fill in every field, then save. The champion is added to the database straight away and shows up in the games on the next page load.</p>
+      </header>
+      <form class="cf-form" novalidate>
+        ${groups.map((g) => `<fieldset class="cf-group"><legend>${escapeHtml(g)}</legend>
+          <div class="cf-grid">${fields.filter((f) => f.group === g).map((f) => champFieldHtml(f, games)).join("")}</div>
+        </fieldset>`).join("")}
+        <p class="form-error cf-summary" role="alert" hidden></p>
+        <div class="cf-actions"><button type="submit" class="btn">Add champion</button>
+          <a class="btn-quiet" href="#/admin">Cancel</a></div>
+      </form>`;
+    const form = root.querySelector(".cf-form");
+    const summary = form.querySelector(".cf-summary");
+    const submit = form.querySelector("button[type=submit]");
+    const control = (name) => form.querySelector(`[name="${name}"]`);
+
+    const setError = (name, text) => {
+      const box = form.querySelector(`.cf-field[data-field="${name}"]`);
+      if (!box) return false;
+      const el = box.querySelector(".cf-error");
+      el.textContent = text;
+      el.hidden = !text;
+      box.classList.toggle("has-error", Boolean(text));
+      return true;
+    };
+    const clearErrors = () => {
+      summary.hidden = true;
+      fields.forEach((f) => setError(f.name, ""));
+    };
+    form.addEventListener("input", (e) => { if (e.target.name) setError(e.target.name, ""); });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      clearErrors();
+      const payload = {};
+      const problems = {};
+      for (const f of fields) {
+        const raw = control(f.name).value.trim();
+        if (raw === "") { if (f.required) problems[f.name] = "This field is required."; continue; }
+        if (f.type === "integer") {
+          const n = Number(raw);
+          if (!Number.isInteger(n)) problems[f.name] = "Enter a whole number.";
+          else if (f.min != null && n < f.min) problems[f.name] = `Must be at least ${f.min}.`;
+          else if (f.max != null && n > f.max) problems[f.name] = `Must be at most ${f.max}.`;
+          else payload[f.name] = n;
+        } else {
+          payload[f.name] = raw;
+        }
+      }
+      if (payload.skill_floor != null && payload.skill_ceiling != null && payload.skill_ceiling < payload.skill_floor) {
+        problems.skill_ceiling = "The skill ceiling can't be lower than the skill floor.";
+      }
+      const bad = Object.keys(problems);
+      if (bad.length) {
+        bad.forEach((name) => setError(name, problems[name]));
+        control(bad[0]).focus();
+        summary.textContent = `Fix ${bad.length} ${bad.length === 1 ? "field" : "fields"} marked below.`;
+        summary.hidden = false;
+        return;
+      }
+
+      submit.disabled = true;
+      submit.textContent = "Adding…";
+      const out = await api("/api/v1/admin/characters", { method: "POST", body: payload, auth: true });
+      if (location.hash !== "#/admin/champions") return;
+      if (out.ok) {
+        try { sessionStorage.removeItem(CACHE_KEY); } catch { /* ignore */ }   // so the roster reloads with the new champion
+        showToast(`${out.data.name} was added.`);
+        root.innerHTML = `${back}
+          <header class="game-head"><h1>${escapeHtml(out.data.name)} was added</h1>
+            <p>${escapeHtml(out.data.title)} is champion number <span class="num">${out.data.id}</span> in the database.</p></header>
+          ${out.data.image ? `<p class="field-hint">Make sure the picture file exists at <code>images/${escapeHtml(out.data.image)}</code> in the website folder, or the champion shows an initial instead of a portrait.</p>` : ""}
+          <div class="cf-actions"><button type="button" class="btn" id="cf-another">Add another champion</button>
+            <a class="btn-quiet" href="#/admin">Back to admin</a></div>`;
+        root.querySelector("#cf-another").addEventListener("click", renderForm);
+        return;
+      }
+      submit.disabled = false;
+      submit.textContent = "Add champion";
+      if (out.status === 401) { route(); return; }
+      if (out.status === 403) { root.innerHTML = adminDeniedHtml("Your account no longer has admin access."); return; }
+      // 422 lists each bad field. 409 means the name is taken for that game.
+      const detail = out.data && out.data.detail;
+      let shown = 0;
+      if (Array.isArray(detail)) {
+        for (const d of detail) {
+          const name = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : "";
+          if (setError(name, String(d.msg).replace(/^Value error, /, ""))) shown++;
+        }
+      } else if (out.status === 409 && typeof detail === "string") {
+        setError("name", detail); shown++;
+      } else if (out.status === 404) {
+        setError("game_id", errorMessage(out.data, "That game does not exist.")); shown++;
+      }
+      summary.textContent = shown ? "The server refused some fields. See the messages below." : errorMessage(out.data, "Couldn't add the champion. Please try again.");
+      summary.hidden = false;
+      const first = form.querySelector(".cf-field.has-error");
+      if (first) first.querySelector("input, select, textarea").focus();
+    });
+  }
+  renderForm();
 }
 
 /* =====================================================
