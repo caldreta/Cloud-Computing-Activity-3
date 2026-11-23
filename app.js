@@ -702,15 +702,19 @@ function createPicker(roster, onPick) {
    SECTION 6: LOLDLE - CLASSIC
    ===================================================== */
 // One entry per feedback column. `kind` decides how a guess is compared.
+//
+// Only facts a fan can reason about are shown: who the champion is (role, region),
+// how they fight (playstyle, damage, range) and when they came out. The rating style
+// fields (skill ceiling, difficulty, mobility) were left out on purpose: they are
+// estimates nobody can deduce, they gave away too much (one guess left only about
+// three champions in play), and they made the game a guessing chore. `kind: "ordered"`
+// still works if a column like that is ever wanted again.
 const CLASSIC_COLUMNS = [
   { key: "role", label: "Role", kind: "multi" },
   { key: "region", label: "Region", kind: "multi" },
   { key: "playstyle", label: "Playstyle", kind: "single" },
   { key: "damage_type", label: "Damage", kind: "single" },
   { key: "attack_type", label: "Attack", kind: "single" },
-  { key: "mobility", label: "Mobility", kind: "ordered", order: ["Low", "Medium", "High"] },
-  { key: "difficulty", label: "Difficulty", kind: "ordered", order: ["Easy", "Medium", "Hard"] },
-  { key: "skill_ceiling", label: "Skill ceiling", kind: "number" },
   { key: "year_released", label: "Released", kind: "number" },
 ];
 
@@ -790,6 +794,7 @@ async function startClassic(root) {
   const picker = createPicker(roster, makeGuess);
   root.querySelector("#picker-slot").replaceWith(picker.el);
   const board = root.querySelector("#board");
+  board.style.setProperty("--cols", CLASSIC_COLUMNS.length);
   const result = root.querySelector("#result");
   const counter = root.querySelector("#counter");
   const giveUpBtn = root.querySelector("#give-up");
