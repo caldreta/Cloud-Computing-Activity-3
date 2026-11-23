@@ -440,12 +440,13 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
 .rank-tag[data-rank="grandmaster"] { --rank: #ff6b7a; }
 .rank-tag[data-rank="challenger"] { --rank: #7fe8ff; text-shadow: 0 0 10px rgba(127, 232, 255, .55); }
 
-.rank-img { width: 1.5em; height: 1.5em; object-fit: contain; }
-.rank-card .rank-img { width: 2.2rem; height: 2.2rem; }
+/* the emblems have empty space around them, so they are drawn larger than the text and pulled back with a negative margin */
+.rank-img { width: 2.6em; height: 2.6em; margin: -.7em -.2em; object-fit: contain; }
+.rank-card .rank-img { width: 5rem; height: 5rem; margin: -1.4rem -.6rem; }
 .rank-card { display: flex; align-items: center; gap: 1.2rem; margin-bottom: 1.75rem; padding: 1.1rem 1.3rem; background: linear-gradient(180deg, var(--surface-2), var(--surface)); border: 1px solid var(--line-strong); border-radius: var(--radius); }
 .rank-card-body { display: grid; gap: .25rem; min-width: 0; }
 .rank-card-body p { margin: 0; }
-.rank-card-title { font: 400 1.35rem var(--font-head); }
+.rank-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .6rem; font: 400 1.35rem var(--font-head); }
 .rank-card-title > span:last-child { color: var(--muted); font: 500 .9rem var(--font-body); margin-left: .4rem; }
 .rank-card-next { color: var(--muted); font-size: .9rem; }
 .rank-card a { color: var(--gold); font-size: .9rem; }
