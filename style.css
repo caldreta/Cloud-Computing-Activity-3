@@ -773,6 +773,8 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
 }
 .cf-field textarea { resize: vertical; min-height: 4.5rem; }
 .cf-field select { cursor: pointer; }
+.cf-field input[type="file"] { padding: .5rem; font-size: .85rem; }
+.cf-preview { max-width: 100%; max-height: 9rem; justify-self: start; object-fit: contain; border: 1px solid var(--line-strong); border-radius: 2px; }
 .cf-field input::placeholder, .cf-field textarea::placeholder { color: #5f6b7d; }
 .cf-field input:focus, .cf-field select:focus, .cf-field textarea:focus { outline: none; border-color: var(--gold); box-shadow: inset 0 2px 8px rgba(0, 0, 0, .5), 0 0 0 1px var(--gold); }
 .cf-field.has-error input, .cf-field.has-error select, .cf-field.has-error textarea { border-color: #b3343f; }

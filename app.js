@@ -21,9 +21,9 @@ async function getRoster() {
   return data.characters;
 }
 
-// For now the images sit in an "images" folder next to index.html.
-// To serve them from the API instead, set IMAGE_BASE to `${API_BASE}/images/`.
-const IMAGE_BASE = "images/";
+// Champion and rank pictures live in a public Supabase Storage bucket. The database stores the path
+// inside the bucket (league/zed.jpg, ranks/iron.png) and this is the address that path is added to.
+const IMAGE_BASE = "https://rmyhndpralukuvynsnbp.supabase.co/storage/v1/object/public/champion-images/";
 function imageUrl(champion) {
   const file = champion.image || (champion.image_url ? champion.image_url.split("/").pop() : null);
   return file ? `${IMAGE_BASE}${file}` : null;
@@ -111,7 +111,8 @@ function errorMessage(data, fallback) {
 // With auth: true it sends the login token, and logs the player out if the token is rejected.
 async function api(path, { method = "GET", body, auth = false } = {}) {
   const headers = {};
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const isFile = typeof Blob !== "undefined" && body instanceof Blob;
+  if (body !== undefined) headers["Content-Type"] = isFile ? (body.type || "application/octet-stream") : "application/json";
   // auth: true needs a login. auth: "optional" sends the token when there is one and never logs the player out.
   if (auth) {
     const session = getSession();
@@ -124,7 +125,7 @@ async function api(path, { method = "GET", body, auth = false } = {}) {
     res = await fetch(`${API_BASE}${path}`, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : (isFile ? body : JSON.stringify(body)),
     });
   } catch (err) {
     console.error(err);
@@ -2206,6 +2207,9 @@ function champFieldHtml(f, games) {
   } else if (f.widget === "select") {
     control = `<select ${attrs}><option value="">Choose…</option>${
       f.options.map((o) => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join("")}</select>`;
+  } else if (f.widget === "image") {
+    control = `<input ${attrs} type="file" accept="image/jpeg,image/png,image/webp">
+      <img class="cf-preview" alt="Preview of the chosen picture" hidden>`;
   } else if (f.widget === "number") {
     control = `<input ${attrs} type="number" inputmode="numeric" step="1"${f.min != null ? ` min="${f.min}"` : ""}${f.max != null ? ` max="${f.max}"` : ""}${f.example ? ` placeholder="e.g. ${escapeHtml(f.example)}"` : ""}>`;
   } else if (f.widget === "textarea") {
@@ -2282,13 +2286,29 @@ async function startAdminChampions(root) {
       fields.forEach((f) => setError(f.name, ""));
     };
     form.addEventListener("input", (e) => { if (e.target.name) setError(e.target.name, ""); });
+    form.addEventListener("change", (e) => {
+      if (e.target.type !== "file") return;
+      const preview = e.target.parentElement.querySelector(".cf-preview");
+      if (preview.dataset.url) URL.revokeObjectURL(preview.dataset.url);
+      const file = e.target.files[0];
+      preview.hidden = !file;
+      preview.dataset.url = file ? URL.createObjectURL(file) : "";
+      if (file) preview.src = preview.dataset.url;
+    });
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       clearErrors();
       const payload = {};
       const problems = {};
+      let pictureFile = null;
       for (const f of fields) {
+        if (f.widget === "image") {
+          pictureFile = control(f.name).files[0] || null;
+          if (pictureFile && !/^image\/(jpeg|png|webp)$/.test(pictureFile.type)) problems[f.name] = "Choose a JPG, PNG or WebP file.";
+          else if (pictureFile && pictureFile.size > 4 * 1024 * 1024) problems[f.name] = "The picture must be 4 MB or smaller.";
+          continue;
+        }
         const raw = control(f.name).value.trim();
         if (raw === "") { if (f.required) problems[f.name] = "This field is required."; continue; }
         if (f.type === "integer") {
@@ -2314,7 +2334,26 @@ async function startAdminChampions(root) {
       }
 
       submit.disabled = true;
-      submit.textContent = "Adding…";
+      submit.textContent = pictureFile ? "Uploading picture…" : "Adding…";
+      if (pictureFile) {
+        const up = await api(`/api/v1/admin/images?game_id=${payload.game_id}&name=${encodeURIComponent(payload.name)}`, {
+          method: "POST", body: pictureFile, auth: true });
+        if (location.hash !== "#/admin/champions") return;
+        if (!up.ok) {
+          submit.disabled = false;
+          submit.textContent = "Add champion";
+          if (up.status === 401) { route(); return; }
+          if (up.status === 403) { root.innerHTML = adminDeniedHtml("Your account no longer has admin access."); return; }
+          const imageField = fields.find((f) => f.widget === "image").name;
+          setError(imageField, errorMessage(up.data, "The picture couldn't be uploaded."));
+          summary.textContent = "The picture wasn't uploaded, so the champion wasn't added.";
+          summary.hidden = false;
+          control(imageField).focus();
+          return;
+        }
+        payload.image = up.data.image;
+        submit.textContent = "Adding…";
+      }
       const out = await api("/api/v1/admin/characters", { method: "POST", body: payload, auth: true });
       if (location.hash !== "#/admin/champions") return;
       if (out.ok) {
@@ -2323,7 +2362,7 @@ async function startAdminChampions(root) {
         root.innerHTML = `${back}
           <header class="game-head"><h1>${escapeHtml(out.data.name)} was added</h1>
             <p>${escapeHtml(out.data.title)} is champion number <span class="num">${out.data.id}</span> in the database.</p></header>
-          ${out.data.image ? `<p class="field-hint">Make sure the picture file exists at <code>images/${escapeHtml(out.data.image)}</code> in the website folder, or the champion shows an initial instead of a portrait.</p>` : ""}
+          ${out.data.image ? portraitHtml(out.data, "lg") : `<p class="field-hint">No picture was added, so this champion shows an initial for now.</p>`}
           <div class="cf-actions"><button type="button" class="btn" id="cf-another">Add another champion</button>
             <a class="btn-quiet" href="#/admin">Back to admin</a></div>`;
         root.querySelector("#cf-another").addEventListener("click", renderForm);

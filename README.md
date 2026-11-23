@@ -7,7 +7,7 @@ This document covers every point where the project touches the champion API: wha
 - The project makes **one API request per browser session**: `GET /api/v1/characters`.
 - That single response (all 40 champions) is kept in memory and reused by every game.
 - The API supplies **all game data**. Nothing about specific champions is written into the project's code.
-- The API does **not** supply the images. They are loaded from a local `images/` folder (see section 6).
+- The API does **not** send the picture files. They are loaded from Supabase Storage using the path the API sends (see section 6).
 
 ## 2. Connection settings
 
@@ -93,24 +93,20 @@ Because it is `sessionStorage`:
 
 ## 6. Images
 
-The API returns an `image` filename and an `image_url` path like `/images/zed.jpg`. But the API **does not serve those files**: its code has no route or static folder for `/images`. Opening `https://cloud-computing-activity.vercel.app/images/zed.jpg` therefore fails.
+Champion and rank pictures are stored in a public **Supabase Storage** bucket called `champion-images`. The database stores only the path inside the bucket, such as `league/zed.jpg` or `ranks/iron.png`, in the `image` column of `characters` and `ranks`.
 
-So for now the project loads images from a folder next to `index.html`:
-
-```js
-const IMAGE_BASE = "images/";
-function imageUrl(champion) { /* returns IMAGE_BASE + the filename */ }
-```
-
-`imageUrl()` takes the filename from `image` (or from the end of `image_url` if `image` is missing). If there is no image data at all, the champion shows a letter tile instead.
-
-**To serve images from the API later**, put the files in a `public/images/` folder in the API project and redeploy. Vercel then serves them at `/images/zed.jpg`. After that, change one line in `app.js`:
+The site builds each picture's address from one constant in `app.js`:
 
 ```js
-const IMAGE_BASE = `${API_BASE}/images/`;
+const IMAGE_BASE = "https://<project>.supabase.co/storage/v1/object/public/champion-images/";
+function imageUrl(champion) { /* returns IMAGE_BASE + the path from the image column */ }
 ```
 
-The home page runs an image check on load: it tries to load the first champion's picture and shows "Images are loading" or the path it expected.
+If a champion has no picture, or the file can't be loaded, the champion shows a letter tile instead.
+
+**Adding a picture:** in the admin panel's "Add a champion" form, choose a JPG, PNG or WebP file (up to 4 MB). The API checks the file, uploads it to the bucket as `<game>/<champion name>.<type>`, then saves that path with the champion. Only the API holds the secret key that is allowed to upload (`SUPABASE_SERVICE_KEY`), so the browser never does.
+
+**Moving existing pictures into the bucket (done once):** `upload_images.py` in the API project copies the `images/league` and `images/ranks` folders into the bucket using the same paths the database already stores.
 
 ## 7. Error handling
 
