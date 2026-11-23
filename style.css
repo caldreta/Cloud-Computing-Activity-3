@@ -363,14 +363,23 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
 .account-link { padding: .35rem 0; color: var(--gold); font: 600 .9rem var(--font-body); text-decoration: none; background: none; border: 0; }
 .account-link:hover, .account-link:focus-visible { color: var(--gold-hi); text-decoration: underline; }
 
-/* the player's crest: a gold hexagon with their overall level */
+/* the player's crest: a hexagon with their overall level. Its outline is the EXP bar. */
+.crest { position: relative; display: grid; place-items: center; flex: none; width: 2.7rem; height: 3rem; }
+.crest svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.crest path { stroke-linejoin: round; }
+.crest-fill { fill: #0a1428; }
+.crest-track { fill: none; stroke: #3b3122; stroke-width: 6; }
+.crest-ring { fill: none; stroke: var(--gold); stroke-width: 6; stroke-linecap: round; filter: drop-shadow(0 0 3px rgba(10, 200, 185, .45)); }
+.crest-level { position: relative; color: var(--gold-hi); font: 600 1rem var(--font-body); font-variant-numeric: tabular-nums; }
 .player { display: flex; align-items: center; gap: .7rem; color: inherit; text-decoration: none; }
-.crest, .reward-crest {
+.crest-lg { width: 5rem; height: 5.6rem; }
+.crest-lg .crest-level { font-size: 1.8rem; }
+.reward-crest {
   display: grid; place-items: center; flex: none; width: 2.4rem; height: 2.7rem;
   clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
   background: linear-gradient(180deg, #ecd9a8, #c8aa6e 55%, #785a28);
 }
-.crest > span, .reward-crest > span {
+.reward-crest > span {
   display: grid; place-items: center; width: calc(100% - 4px); height: calc(100% - 4px);
   clip-path: inherit; background: radial-gradient(circle at 50% 30%, #1b2c48, #0a1428);
   color: var(--gold-hi); font: 600 1rem var(--font-body);
@@ -378,6 +387,7 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
 .player-text { display: grid; line-height: 1.25; }
 .player-name { color: var(--gold-hi); font-weight: 600; }
 .player-sub { color: var(--muted); font-size: .78rem; }
+.player-text .rank-tag { font-size: .8rem; }
 .player:hover .player-name, .player:focus-visible .player-name { color: var(--gold); text-decoration: underline; }
 
 /* EXP reward inside result panels */
@@ -416,6 +426,51 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
 .auth-switch { margin: 0; color: var(--muted); font-size: .9rem; }
 .auth-switch a, .game-head p a { color: var(--gold); }
 .auth-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
+
+/* ranks */
+.rank-tag { --rank: #9aa0a6; color: var(--rank); font-weight: 700; letter-spacing: .02em; }
+.rank-tag[data-rank="iron"] { --rank: #9a9a9a; }
+.rank-tag[data-rank="bronze"] { --rank: #c98a5a; }
+.rank-tag[data-rank="silver"] { --rank: #cfd8e3; }
+.rank-tag[data-rank="gold"] { --rank: #f0c75e; }
+.rank-tag[data-rank="platinum"] { --rank: #4fd1c5; }
+.rank-tag[data-rank="emerald"] { --rank: #3ddc84; }
+.rank-tag[data-rank="diamond"] { --rank: #6fb1ff; }
+.rank-tag[data-rank="master"] { --rank: #c47dff; }
+.rank-tag[data-rank="grandmaster"] { --rank: #ff6b7a; }
+.rank-tag[data-rank="challenger"] { --rank: #7fe8ff; text-shadow: 0 0 10px rgba(127, 232, 255, .55); }
+
+.rank-card { display: flex; align-items: center; gap: 1.2rem; margin-bottom: 1.75rem; padding: 1.1rem 1.3rem; background: linear-gradient(180deg, var(--surface-2), var(--surface)); border: 1px solid var(--line-strong); border-radius: var(--radius); }
+.rank-card-body { display: grid; gap: .25rem; min-width: 0; }
+.rank-card-body p { margin: 0; }
+.rank-card-title { font: 400 1.35rem var(--font-head); }
+.rank-card-title > span:last-child { color: var(--muted); font: 500 .9rem var(--font-body); margin-left: .4rem; }
+.rank-card-next { color: var(--muted); font-size: .9rem; }
+.rank-card a { color: var(--gold); font-size: .9rem; }
+
+/* leaderboard */
+.lb-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.lb-list li {
+  display: grid; grid-template-columns: 2.6rem minmax(6rem, 1fr) 7.5rem 5.5rem 7rem; align-items: center; gap: .8rem;
+  padding: .65rem 1rem; background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  border: 1px solid var(--line); border-radius: var(--radius);
+}
+.lb-list li.is-me { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(200, 170, 110, .35); }
+.lb-list li[data-place="1"] .lb-place { color: #f0c75e; }
+.lb-list li[data-place="2"] .lb-place { color: #cfd8e3; }
+.lb-list li[data-place="3"] .lb-place { color: #c98a5a; }
+.lb-list li.lb-gap { display: block; padding: 0; text-align: center; color: var(--muted); background: none; border: 0; }
+.lb-place { color: var(--muted); font: 700 1.05rem var(--font-body); font-variant-numeric: tabular-nums; }
+.lb-name { color: var(--gold-hi); font-weight: 700; overflow-wrap: anywhere; }
+.lb-you { margin-left: .35rem; padding: .05rem .4rem; color: var(--bg); font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; background: var(--gold); border-radius: 2px; }
+.lb-level { color: var(--muted); font-size: .85rem; }
+.lb-exp { color: var(--teal); font-weight: 600; font-size: .9rem; text-align: right; font-variant-numeric: tabular-nums; }
+.lb-foot { margin: .9rem 0 0; color: var(--muted); font-size: .85rem; }
+.rank-ladder { margin-top: 1.5rem; color: var(--muted); }
+.rank-ladder summary { cursor: pointer; color: var(--gold); font-weight: 600; }
+.rank-ladder ul { list-style: none; margin: .7rem 0 0; padding: 0; display: grid; gap: .3rem; }
+.rank-ladder li { display: flex; gap: .8rem; }
+.rank-ladder li .rank-tag { min-width: 7rem; }
 
 /* My progress page */
 .progress-cat { --accent: var(--loldle); margin-bottom: 1.75rem; }
@@ -465,6 +520,7 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
   /* the hub's one entrance: the roster fans in from the left */
   .roster-strip .portrait { animation: fan .5s cubic-bezier(.2, .7, .2, 1) both; }
   .roster-strip .portrait:nth-child(n) { animation-delay: calc(var(--n, 0) * 40ms); }
+  .crest-ring { transition: stroke-dasharray 1s cubic-bezier(.2, .8, .2, 1); }
   .exp-bar > span { transition: width 1.1s cubic-bezier(.2, .8, .2, 1) .15s; }
   .reward-crest { animation: crest-in .6s cubic-bezier(.2, .8, .2, 1) both; }
   .is-level-up .reward-crest { animation: crest-in .7s cubic-bezier(.2, .8, .2, 1) both, crest-glow 1.6s ease-in-out .7s 2; }
@@ -506,6 +562,11 @@ a.btn, a.btn-quiet { display: inline-block; text-decoration: none; }
   .player-text { display: none; }
   .hero { margin-bottom: 2.25rem; }
   .quiz-option .key-hint { display: none; }
+  .lb-list li { grid-template-columns: 2rem 1fr auto; row-gap: .1rem; }
+  .lb-rank { grid-column: 2; grid-row: 2; font-size: .85rem; }
+  .lb-level { display: none; }
+  .lb-exp { grid-column: 3; grid-row: 1 / span 2; }
+  .rank-card { flex-direction: column; align-items: flex-start; }
   .progress-rows li { grid-template-columns: 1fr auto; }
   .progress-rows .exp-bar { grid-column: 1 / -1; max-width: none; }
   .progress-exp { text-align: left; }

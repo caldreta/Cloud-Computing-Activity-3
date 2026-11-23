@@ -38,6 +38,7 @@ const SESSION_KEY = "moba-hub:session";
 const EXP_PER_LEVEL = 100; // must match EXP_PER_LEVEL in the API's rules.py
 
 let progressBySlug = {};   // game mode slug -> total EXP, filled after login
+let ranks = [];            // [{ name, min_level }] from the API, lowest rank first
 
 function getSession() {
   try {
@@ -62,6 +63,45 @@ function levelFor(exp) {
   return 1 + Math.floor(exp / EXP_PER_LEVEL);
 }
 
+// Ranks live in the database. The player's rank is the highest one whose min_level they have reached.
+function rankFor(level) {
+  let found = null;
+  for (const r of ranks) if (level >= r.min_level) found = r;
+  return found;
+}
+
+function nextRankFor(level) {
+  return ranks.find((r) => r.min_level > level) || null;
+}
+
+async function loadRanks() {
+  const res = await api("/api/v1/ranks");
+  if (res.ok) {
+    ranks = res.data.ranks;
+    renderAccountBar();
+  }
+}
+
+// Rank name as a coloured tag. Colours are set per rank in style.css.
+function rankTagHtml(name) {
+  return `<span class="rank-tag" data-rank="${escapeHtml(String(name).toLowerCase())}">${escapeHtml(name)}</span>`;
+}
+
+// The hexagonal level crest. The outline is the EXP bar: it fills clockwise from the top
+// as the player moves towards the next level.
+function crestHtml(level, into, extraClass = "") {
+  const pct = Math.max(0, Math.min(100, into / EXP_PER_LEVEL * 100));
+  const hex = "M43.3 0 L86.6 25 L86.6 75 L43.3 100 L0 75 L0 25 Z";
+  return `<span class="crest ${extraClass}" role="img" aria-label="Level ${level}, ${into} of ${EXP_PER_LEVEL} EXP towards level ${level + 1}">
+      <svg viewBox="-6 -6 98.6 112" aria-hidden="true" focusable="false">
+        <path class="crest-fill" d="${hex}"/>
+        <path class="crest-track" d="${hex}"/>
+        <path class="crest-ring" d="${hex}" pathLength="100" stroke-dasharray="${pct} 100"/>
+      </svg>
+      <span class="crest-level">${level}</span>
+    </span>`;
+}
+
 // Turns any API error body into one readable sentence.
 function errorMessage(data, fallback) {
   const detail = data && data.detail;
@@ -80,10 +120,11 @@ function errorMessage(data, fallback) {
 async function api(path, { method = "GET", body, auth = false } = {}) {
   const headers = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
+  // auth: true needs a login. auth: "optional" sends the token when there is one and never logs the player out.
   if (auth) {
     const session = getSession();
-    if (!session) return { ok: false, status: 401, data: { detail: "Please log in first." } };
-    headers.Authorization = `Bearer ${session.token}`;
+    if (session) headers.Authorization = `Bearer ${session.token}`;
+    else if (auth === true) return { ok: false, status: 401, data: { detail: "Please log in first." } };
   }
 
   let res;
@@ -102,7 +143,7 @@ async function api(path, { method = "GET", body, auth = false } = {}) {
   if (res.status !== 204) {
     try { data = await res.json(); } catch { /* empty or non-JSON body */ }
   }
-  if (auth && res.status === 401) {
+  if (auth === true && res.status === 401) {
     clearSession();
     showToast("Your session has ended. Please log in again.");
   }
@@ -259,14 +300,17 @@ function renderAccountBar() {
   const el = document.getElementById("account-bar");
   if (!el) return;
   const session = getSession();
+  const board = `<a class="account-link" href="#/leaderboard">Leaderboard</a>`;
   if (!session) {
-    el.innerHTML = `<a class="account-link" href="#/login">Log in</a>
+    el.innerHTML = `${board}<a class="account-link" href="#/login">Log in</a>
       <a class="btn btn-small" href="#/register">Sign up</a>`;
   } else {
-    el.innerHTML = `<a class="player" href="#/account" title="See your progress">
-        <span class="crest" aria-hidden="true"><span>${overallLevel()}</span></span>
+    const level = overallLevel();
+    const rank = rankFor(level);
+    el.innerHTML = `${board}<a class="player" href="#/account" title="See your progress">
+        ${crestHtml(level, totalExp() % EXP_PER_LEVEL)}
         <span class="player-text"><span class="player-name">${escapeHtml(session.username)}</span>
-          <span class="player-sub">Level ${overallLevel()}, ${totalExp()} EXP</span></span>
+          <span class="player-sub">${rank ? rankTagHtml(rank.name) : `Level ${level}`}</span></span>
       </a>
       <button type="button" class="account-link" data-action="logout">Log out</button>`;
     el.querySelector("[data-action=logout]").addEventListener("click", () => {
@@ -283,7 +327,7 @@ function renderHeroNote() {
   if (!el) return;
   const session = getSession();
   el.innerHTML = session
-    ? `Welcome back, ${escapeHtml(session.username)}. You're level ${overallLevel()} overall.`
+    ? `Welcome back, ${escapeHtml(session.username)}. You're level ${overallLevel()}${rankFor(overallLevel()) ? `, ${escapeHtml(rankFor(overallLevel()).name)}` : ""}.`
     : `<a href="#/register">Create an account</a> to save your EXP.`;
 }
 
@@ -431,7 +475,7 @@ async function checkApi() {
   }
 }
 
-const CATEGORY_NAMES = { loldle: "Loldle", quick: "Quick decisions", matching: "Matching", account: "Account" };
+const CATEGORY_NAMES = { loldle: "Loldle", quick: "Quick decisions", matching: "Matching", account: "Account", leaderboard: "Leaderboard" };
 
 // "All games / Loldle" trail at the top of every game and account page.
 function crumbHtml() {
@@ -450,6 +494,7 @@ const PAGES = {
   login: (root) => startAuth(root, "login"),
   register: (root) => startAuth(root, "register"),
   account: startAccount,
+  leaderboard: startLeaderboard,
 };
 
 function route() {
@@ -457,7 +502,7 @@ function route() {
   const start = GAMES[key] || PAGES[key];
   gameScreen.innerHTML = "";
   if (start) {
-    gameScreen.dataset.cat = GAMES[key] ? key.split("/")[0] : "account";
+    gameScreen.dataset.cat = GAMES[key] ? key.split("/")[0] : key === "leaderboard" ? "leaderboard" : "account";
     hubScreen.hidden = true;
     gameScreen.hidden = false;
     window.scrollTo(0, 0);
@@ -472,7 +517,7 @@ function route() {
 
 function pageTitle(key) {
   const mode = CATEGORIES.flatMap((c) => c.modes).find((m) => m.href === `#/${key}`);
-  return mode ? mode.name : { login: "Log in", register: "Sign up", account: "My progress" }[key] || "Champion Games";
+  return mode ? mode.name : { login: "Log in", register: "Sign up", account: "My progress", leaderboard: "Leaderboard" }[key] || "Champion Games";
 }
 
 /* =====================================================
@@ -1569,6 +1614,7 @@ async function startAccount(root) {
       <p>Signed in as <strong>${escapeHtml(session.username)}</strong>. Finished games earn 10 EXP per correct answer,
         up to 100 per game, and every ${EXP_PER_LEVEL} EXP is a new level.</p>
     </header>
+    <div id="rank-summary"></div>
     <div id="progress-list"><p class="loading" role="status">Loading your progress…</p></div>
     <section class="danger-zone" aria-labelledby="delete-heading">
       <h2 id="delete-heading">Delete account</h2>
@@ -1614,6 +1660,20 @@ async function startAccount(root) {
   if (location.hash !== "#/account") return;   // the player left while it loaded
   if (!getSession()) { route(); return; }      // the session ended while it loaded
 
+  const level = overallLevel();
+  const rank = rankFor(level);
+  const next = nextRankFor(level);
+  root.querySelector("#rank-summary").innerHTML = `<section class="rank-card">
+      ${crestHtml(level, totalExp() % EXP_PER_LEVEL, "crest-lg")}
+      <div class="rank-card-body">
+        <p class="rank-card-title">${rank ? rankTagHtml(rank.name) : ""} <span>Level ${level}, ${totalExp()} EXP</span></p>
+        <p class="rank-card-next">${next
+          ? `${EXP_PER_LEVEL - totalExp() % EXP_PER_LEVEL} EXP to level ${level + 1}. ${escapeHtml(next.name)} starts at level ${next.min_level}.`
+          : "You've reached the top rank."}</p>
+        <a href="#/leaderboard">See the leaderboard</a>
+      </div>
+    </section>`;
+
   root.querySelector("#progress-list").innerHTML = CATEGORIES.map((cat) => `
     <section class="progress-cat" data-cat="${cat.id}">
       <h2>${cat.name}</h2>
@@ -1630,12 +1690,65 @@ async function startAccount(root) {
 }
 
 /* =====================================================
+   SECTION 11: LEADERBOARD
+   #/leaderboard: the top players by total EXP, from the API's leaderboard view.
+   ===================================================== */
+function leaderRowHtml(p, isMe) {
+  return `<li class="${isMe ? "is-me" : ""}" data-place="${p.position <= 3 ? p.position : ""}">
+      <span class="lb-place">${p.position}</span>
+      <span class="lb-name">${escapeHtml(p.username)}${isMe ? ` <span class="lb-you">you</span>` : ""}</span>
+      <span class="lb-rank">${rankTagHtml(p.rank)}</span>
+      <span class="lb-level">Level ${p.level}</span>
+      <span class="lb-exp">${p.total_exp.toLocaleString()} EXP</span>
+    </li>`;
+}
+
+async function startLeaderboard(root) {
+  root.innerHTML = `
+    ${crumbHtml()}
+    <header class="game-head">
+      <h1>Leaderboard</h1>
+      <p>Every player ranked by total EXP across all game modes. Rank comes from your overall level.</p>
+    </header>
+    <div id="leaderboard"><p class="loading" role="status">Loading the leaderboard…</p></div>
+    <details class="rank-ladder"><summary>All ranks</summary><ul id="rank-ladder"></ul></details>`;
+
+  const res = await api("/api/v1/leaderboard?limit=50", { auth: "optional" });
+  if (location.hash !== "#/leaderboard") return;   // the player left while it loaded
+  const box = root.querySelector("#leaderboard");
+  if (!res.ok) {
+    box.innerHTML = `<p class="form-error" role="alert">${escapeHtml(errorMessage(res.data, "Couldn't load the leaderboard."))}</p>`;
+    return;
+  }
+
+  const { leaders, me, total_players: total } = res.data;
+  const meName = me ? me.username.toLowerCase() : null;
+  const meInList = me && leaders.some((p) => p.username.toLowerCase() === meName);
+  box.innerHTML = leaders.length
+    ? `<ol class="lb-list">${leaders.map((p) => leaderRowHtml(p, p.username.toLowerCase() === meName)).join("")}
+        ${me && !meInList ? `<li class="lb-gap" aria-hidden="true">…</li>${leaderRowHtml(me, true)}` : ""}</ol>
+       <p class="lb-foot">${total} ranked ${total === 1 ? "player" : "players"}. Players with no EXP yet aren't listed.</p>`
+    : `<p class="loading">Nobody has earned EXP yet. <a href="#/">Play a game</a> to be first.</p>`;
+
+  const showLadder = () => {
+    const list = root.querySelector("#rank-ladder");
+    if (!list) return;
+    list.innerHTML = ranks.map((r, i) => {
+      const upper = ranks[i + 1] ? `Levels ${r.min_level} to ${ranks[i + 1].min_level - 1}` : `Level ${r.min_level} and up`;
+      return `<li>${rankTagHtml(r.name)} <span>${upper}</span></li>`;
+    }).join("");
+  };
+  if (ranks.length) showLadder(); else loadRanks().then(showLadder);
+}
+
+/* =====================================================
    START
    ===================================================== */
 document.getElementById("random-game").addEventListener("click", playRandomGame);
 renderAccountBar();
 renderCategories();
 checkApi();
+loadRanks();
 refreshProgress();
 window.addEventListener("hashchange", route);
 route();   // open the right screen when the page loads on a #/ address
