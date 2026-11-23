@@ -1325,7 +1325,7 @@ function startTrueFalse(root) {
 /* =====================================================
    SECTION 9: MATCHING
    One shared runner (startMatching) plus one board maker per game.
-   Pick a card from the tray, then pick the place it belongs.
+   Drag a card onto the place it belongs. Clicking works too: pick a card, then pick the place.
    A board maker returns:
      { items:   [{ id, html, accepts: [targetId, ...] }],
        targets: [{ id, html, capacity }] }
@@ -1373,7 +1373,7 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
     const done = placed.size === board.items.length;
     const remaining = board.items.filter((i) => !placed.has(i.id));
     const status = done ? "All placed."
-      : message || (selected ? "Now choose where it belongs." : "Pick a card, then pick where it belongs.");
+      : message || (selected ? "Now choose where it belongs." : "Drag each card to where it belongs.");
 
     mount.innerHTML = `
       <p class="match-status" role="status">${escapeHtml(status)} <span class="match-mistakes">Mistakes: ${mistakes}</span></p>
@@ -1406,25 +1406,13 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
     if (el) el.focus();
   }
 
-  mount.addEventListener("click", (e) => {
-    const again = e.target.closest("#again");
-    if (again) { newRun(); focusItem(null); return; }
+  // Puts a card on a place. Used by clicking and by dragging. Returns true when it was right.
+  function tryPlace(itemId, targetId, { dragged = false } = {}) {
+    const item = board.items.find((i) => i.id === itemId);
+    const target = board.targets.find((t) => t.id === targetId);
+    if (!item || !target) return false;
+    if (board.items.filter((i) => placed.get(i.id) === targetId).length >= target.capacity) return false;
 
-    const itemBtn = e.target.closest(".match-item");
-    if (itemBtn) {
-      selected = selected === itemBtn.dataset.id ? null : itemBtn.dataset.id;
-      message = "";
-      render();
-      focusItem(selected || itemBtn.dataset.id);
-      return;
-    }
-
-    const targetBtn = e.target.closest(".match-target-btn");
-    if (!targetBtn || targetBtn.getAttribute("aria-disabled") === "true") return;
-    if (!selected) { message = "Pick a card from the tray first."; render(); return; }
-
-    const item = board.items.find((i) => i.id === selected);
-    const targetId = targetBtn.dataset.id;
     if (item.accepts.includes(targetId)) {
       placed.set(item.id, targetId);
       lastPlaced = item.id;
@@ -1443,16 +1431,106 @@ async function startMatching(root, { hash, title, intro, makeBoard }) {
           setReward(mount, html);
         });
         recordHits(board.items.filter((i) => i.champ && !missed.has(i.id)).map((i) => i.champ.id));
-      } else focusItem(null);
-    } else {
-      mistakes++;
-      missed.add(item.id);
-      message = "Not there. Try another place.";
-      render();
-      focusItem(selected);
-      const bad = byId(".match-target-btn", targetId);
-      if (bad) { bad.dataset.flash = "wrong"; setTimeout(() => bad.removeAttribute("data-flash"), 700); }
+      } else if (!dragged) focusItem(null);
+      return true;
     }
+
+    mistakes++;
+    missed.add(item.id);
+    message = "Not there. Try another place.";
+    if (dragged && selected === item.id) selected = null;
+    render();
+    if (!dragged) focusItem(selected);
+    const bad = byId(".match-target-btn", targetId);
+    if (bad) { bad.dataset.flash = "wrong"; setTimeout(() => bad.removeAttribute("data-flash"), 700); }
+    return false;
+  }
+
+  let justDragged = false;   // a drag ends with a click on some elements; that click must not select a card
+  mount.addEventListener("click", (e) => {
+    if (justDragged) { e.preventDefault(); return; }
+    const again = e.target.closest("#again");
+    if (again) { newRun(); focusItem(null); return; }
+
+    const itemBtn = e.target.closest(".match-item");
+    if (itemBtn) {
+      selected = selected === itemBtn.dataset.id ? null : itemBtn.dataset.id;
+      message = "";
+      render();
+      focusItem(selected || itemBtn.dataset.id);
+      return;
+    }
+
+    const targetBtn = e.target.closest(".match-target-btn");
+    if (!targetBtn || targetBtn.getAttribute("aria-disabled") === "true") return;
+    if (!selected) { message = "Drag a card here, or pick one from the tray first."; render(); return; }
+    tryPlace(selected, targetBtn.dataset.id);
+  });
+
+  // Drag a card onto a place. Pointer events cover mouse, touch and pen with one piece of code.
+  mount.addEventListener("dragstart", (e) => e.preventDefault());   // no native image dragging
+  mount.addEventListener("pointerdown", (e) => {
+    const itemBtn = e.target.closest(".match-item");
+    if (!itemBtn || (e.pointerType === "mouse" && e.button !== 0)) return;
+    const id = itemBtn.dataset.id;
+    const rect = itemBtn.getBoundingClientRect();
+    const grab = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const start = { x: e.clientX, y: e.clientY };
+    let pos = { ...start };
+    let ghost = null, hover = null, raf = 0;
+
+    const updateHover = () => {
+      const el = document.elementFromPoint(pos.x, pos.y);   // the ghost ignores pointers, so this sees what is under it
+      const box = el && el.closest(".match-target");
+      const open = box && mount.contains(box) && box.querySelector(".match-target-btn").getAttribute("aria-disabled") !== "true";
+      const next = open ? box : null;
+      if (next === hover) return;
+      if (hover) hover.classList.remove("drag-over");
+      hover = next;
+      if (hover) hover.classList.add("drag-over");
+    };
+    const frame = () => {
+      if (pos.y < 70) window.scrollBy(0, -14);                       // scroll the page when dragging near an edge
+      else if (pos.y > window.innerHeight - 70) window.scrollBy(0, 14);
+      updateHover();
+      raf = requestAnimationFrame(frame);
+    };
+    const move = (ev) => {
+      pos = { x: ev.clientX, y: ev.clientY };
+      if (!ghost) {
+        if (Math.hypot(pos.x - start.x, pos.y - start.y) < 8) return;   // still a click
+        ghost = itemBtn.cloneNode(true);
+        ghost.classList.add("match-drag-ghost");
+        ghost.removeAttribute("id");
+        ghost.setAttribute("aria-hidden", "true");
+        ghost.tabIndex = -1;
+        ghost.style.width = `${rect.width}px`;
+        document.body.appendChild(ghost);
+        itemBtn.classList.add("is-dragging");
+        document.body.classList.add("is-match-dragging");
+        raf = requestAnimationFrame(frame);
+      }
+      ghost.style.transform = `translate(${pos.x - grab.x}px, ${pos.y - grab.y}px) rotate(2deg)`;
+      updateHover();
+    };
+    const end = (ev) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      cancelAnimationFrame(raf);
+      if (!ghost) return;                                            // it was a click, which the click handler deals with
+      const targetBox = ev.type === "pointerup" ? hover : null;
+      ghost.remove();
+      itemBtn.classList.remove("is-dragging");
+      document.body.classList.remove("is-match-dragging");
+      if (hover) hover.classList.remove("drag-over");
+      justDragged = true;
+      setTimeout(() => { justDragged = false; }, 80);
+      if (targetBox) tryPlace(id, targetBox.querySelector(".match-target-btn").dataset.id, { dragged: true });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
   });
 
   newRun();
@@ -2202,25 +2280,36 @@ function champFieldHtml(f, games) {
   const attrs = `id="${id}" name="${f.name}"`;
   let control;
   if (f.widget === "game") {
-    control = `<select ${attrs}><option value="">Choose a game</option>${
+    // With one game there is nothing to choose: show it and send it quietly.
+    if (games.length === 1) {
+      return `<div class="cf-field">
+          <span class="cf-static-label">${escapeHtml(f.label)}</span>
+          <p class="cf-static">${escapeHtml(games[0].name)}</p>
+          <input type="hidden" name="${f.name}" value="${games[0].id}">
+        </div>`;
+    }
+    control = `<select ${attrs}>${
       games.map((g) => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join("")}</select>`;
   } else if (f.widget === "select") {
-    control = `<select ${attrs}><option value="">Choose…</option>${
+    control = `<select ${attrs}>${
       f.options.map((o) => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join("")}</select>`;
   } else if (f.widget === "image") {
     control = `<input ${attrs} type="file" accept="image/jpeg,image/png,image/webp">
       <img class="cf-preview" alt="Preview of the chosen picture" hidden>`;
   } else if (f.widget === "number") {
-    control = `<input ${attrs} type="number" inputmode="numeric" step="1"${f.min != null ? ` min="${f.min}"` : ""}${f.max != null ? ` max="${f.max}"` : ""}${f.example ? ` placeholder="e.g. ${escapeHtml(f.example)}"` : ""}>`;
+    // a text box that only takes digits, so there is no "e", "+", "-" or "."
+    control = `<input ${attrs} type="text" inputmode="numeric" autocomplete="off" data-digits="1"${f.max != null ? ` maxlength="${String(f.max).length}"` : ""}${f.example ? ` placeholder="e.g. ${escapeHtml(f.example)}"` : ""}>`;
   } else if (f.widget === "textarea") {
     control = `<textarea ${attrs} rows="3"${f.max_length ? ` maxlength="${f.max_length}"` : ""}></textarea>`;
   } else {
     control = `<input ${attrs} autocomplete="off" spellcheck="false"${f.max_length ? ` maxlength="${f.max_length}"` : ""}${f.example ? ` placeholder="e.g. ${escapeHtml(f.example)}"` : ""}>`;
   }
+  const counted = f.max_length && (f.widget === "text" || f.widget === "textarea");
   return `<div class="cf-field${f.widget === "textarea" ? " cf-wide" : ""}" data-field="${f.name}">
       <label for="${id}">${escapeHtml(f.label)}${f.required ? "" : ` <span class="cf-optional">(optional)</span>`}</label>
       ${control}
-      ${f.hint ? `<p class="field-hint">${escapeHtml(f.hint)}</p>` : ""}
+      ${f.hint || counted ? `<div class="cf-meta">${f.hint ? `<p class="field-hint">${escapeHtml(f.hint)}</p>` : "<span></span>"}${
+        counted ? `<span class="cf-count" data-for="${f.name}" data-max="${f.max_length}">0 / ${f.max_length}</span>` : ""}</div>` : ""}
       <p class="cf-error" role="alert" hidden></p>
     </div>`;
 }
@@ -2285,7 +2374,19 @@ async function startAdminChampions(root) {
       summary.hidden = true;
       fields.forEach((f) => setError(f.name, ""));
     };
-    form.addEventListener("input", (e) => { if (e.target.name) setError(e.target.name, ""); });
+    form.addEventListener("input", (e) => {
+      if (e.target.dataset && e.target.dataset.digits) {
+        const digits = e.target.value.replace(/\D/g, "");
+        if (digits !== e.target.value) e.target.value = digits;
+      }
+      const counter = e.target.name && form.querySelector(`.cf-count[data-for="${e.target.name}"]`);
+      if (counter) {
+        const used = e.target.value.length;
+        counter.textContent = `${used} / ${counter.dataset.max}`;
+        counter.classList.toggle("is-near", used >= Number(counter.dataset.max) * 0.9);
+      }
+      if (e.target.name) setError(e.target.name, "");
+    });
     form.addEventListener("change", (e) => {
       if (e.target.type !== "file") return;
       const preview = e.target.parentElement.querySelector(".cf-preview");
